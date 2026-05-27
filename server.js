@@ -214,20 +214,62 @@ function buildSyscall(db, thread) {
 
 function buildHotspots(db, scenarioId, dimension, threads) {
   const rows = all(db, "SELECT * FROM hotspot_threads WHERE scenario_id = ? AND dimension = ? ORDER BY rank", [scenarioId, dimension]);
-  return rows.map((row) => {
+  const builtRows = rows.map((row) => {
     const thread = threads.find((item) => item.id === row.thread_id) || {};
+    const sos = all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank", [row.id]).map((so) => {
+      const funcs = all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]).map(roundValueRow);
+      return {
+        name: so.name || missingHotspotName(dimension, thread, "so"),
+        value: valueAtOrNA(so.value),
+        funcs: funcs.length ? funcs : [missingHotspotFunction(dimension, thread, so.name)],
+      };
+    });
     return {
       name: thread.name,
       threadType: thread.threadType,
       loadShare: round2(thread.loadShare),
       score: valueAtOrNA(row.score),
-      sos: all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank", [row.id]).map((so) => ({
-        name: so.name,
-        value: valueAtOrNA(so.value),
-        funcs: all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]).map(roundValueRow),
-      })),
+      sos: sos.length ? sos : [missingHotspotSo(dimension, thread)],
     };
   });
+  const seenThreads = new Set(builtRows.map((row) => `${row.threadType}:${row.name}`));
+  const missingRows = threads
+    .filter((thread) => !seenThreads.has(`${thread.threadType}:${thread.name}`))
+    .slice(0, Math.max(0, 3 - builtRows.length))
+    .map((thread) => missingHotspotThread(dimension, thread));
+  return [...builtRows, ...missingRows].slice(0, 3);
+}
+
+function missingHotspotThread(dimension, thread) {
+  return {
+    name: thread.name,
+    threadType: thread.threadType,
+    loadShare: round2(thread.loadShare),
+    score: NA,
+    sos: [missingHotspotSo(dimension, thread)],
+  };
+}
+
+function missingHotspotSo(dimension, thread) {
+  return {
+    name: missingHotspotName(dimension, thread, "so"),
+    value: NA,
+    funcs: [missingHotspotFunction(dimension, thread)],
+  };
+}
+
+function missingHotspotFunction(dimension, thread, soName = "") {
+  const soPart = soName ? ` / ${soName}` : "";
+  return { name: `未识别函数（${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"}${soPart}）`, value: NA };
+}
+
+function missingHotspotName(dimension, thread, kind) {
+  const label = kind === "so" ? "未识别SO" : "未识别函数";
+  return `${label}（${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"}）`;
+}
+
+function hotspotDimensionLabel(dimension) {
+  return { cycle: "Cycle 热点", fe: "FE 瓶颈", be: "BE 瓶颈" }[dimension] || dimension;
 }
 
 function buildFeatures(db) {
