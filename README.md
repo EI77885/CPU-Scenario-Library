@@ -106,7 +106,9 @@ source_data\
 - 每个场景目录下需要有同级 `hitrace\` 目录。
 - `hitrace\trace_summary.json` 用于提供负载三视图结构化数据；该文件名不绑定具体 trace 来源，后续 Android 或鸿蒙 trace 解析器只要输出同结构 JSON 即可接入。如果暂时缺失，导入器会记录 warning，并跳过该场景的三视图数据。
 - 目标环境 Excel 只有一个 sheet 页也可以。导入器会按关键词识别基础信息、负载信息、TOPDOWN、指令分布、系统调用、热点 SO/函数等分段。
+- 示例数据源的单 sheet 布局按目标表截图组织：顶部基础信息、负载三视图区域、Hizee 表、横向 TOPDOWN 块、指令分布、系统调用、热点/Bound SO 与函数三层树，并包含合并单元格。导入器会读取 `.xlsx` 的 `mergeCells`，将合并区域左上角文本作为上下文继承，避免合并单元格导致线程名、SO 名或分段标题丢失。
 - 频率单位统一使用 `Mhz`，数据库和前端展示都不再转换为 `GHz`。
+- 从 Excel 数据表中提取到的所有数值统一保留两位小数，百分比同样保留两位小数；数据库中保存的是已四舍五入后的数值，前端展示也固定为两位小数。
 
 ## 5. 生成 trace_summary.json
 
@@ -198,6 +200,7 @@ node scripts/import-source-data.js --source D:\cpu-scenario-library\source_data 
 - 已存在场景会更新主表，并清理后重写该场景的子表数据。
 - 未出现在本次 `source_data` 中的旧场景会保留。
 - 场景唯一 ID 由“分类目录 + 场景目录名”生成，例如 `01_game-wzry_replay`。
+- 导入时会对 Excel 中解析出的数值做两位小数规整，包括负载占比、Hizee 数据、PMU、系统调用占比和热点 SO/函数占比。
 - 默认使用宽松导入模式：单个场景或单个分段解析失败时会记录 warning，并继续导入其它可识别数据。
 - 单个场景失败不会回滚其它场景，导入结果会显示 `已导入场景数/发现的场景数`。
 
@@ -217,6 +220,22 @@ node scripts/import-source-data.js --debug
 ```
 
 调试输出会打印当前导入的 Excel 路径、sheet 行数、识别到的场景基础信息、单 sheet 分段行号，以及被跳过分段的错误堆栈。建议将这段输出连同对应 Excel 一起保存，便于继续增强解析规则。
+
+TOPDOWN/PMU 名称会先做通用归一化，再匹配别名映射：
+
+- 忽略大小写、空格、斜杠、短横线、下划线差异。
+- 自动去除 `_PKI` 后缀。
+- `FE_PKI`、`FE`、`FRONTEND_BOUND` 等高置信别名会映射到前端的 `FE BOUND`。
+- `BE_PKI`、`BE`、`BACKEND_BOUND` 等高置信别名会映射到前端的 `BE BOUND`。
+- 常见 PMU 写法差异，例如 cache/tlb/stall/branch 类事件的下划线和拼写变体，会映射到前端标准事件名。
+
+如果 TOPDOWN 区域出现“大写事件名 + 右侧数值”，但导入器无法确定它对应哪个前端指标，会输出：
+
+```text
+Unresolved topdown metric alias for <scenario_id>: <metric_name>
+```
+
+这类不做自动猜测，需要确认映射关系后再加入别名表。
 
 如果希望发现任何坏表后让命令返回失败，可增加 `--strict`：
 

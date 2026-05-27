@@ -3,18 +3,18 @@
   "clusterOverview": [
     {
       "cluster": "小核",
-      "running": 37.7,
-      "idle": 62.3
+      "running": 37.66,
+      "idle": 62.34
     },
     {
       "cluster": "中核",
-      "running": 51.4,
-      "idle": 48.6
+      "running": 51.38,
+      "idle": 48.62
     },
     {
       "cluster": "大核",
-      "running": 66.1,
-      "idle": 33.9
+      "running": 66.13,
+      "idle": 33.87
     }
   ],
   "processOverview": [
@@ -23,27 +23,27 @@
       "items": [
         {
           "name": "system_server",
-          "value": 10.5
+          "value": 10.53
         },
         {
           "name": "render_service",
-          "value": 8.6
+          "value": 8.61
         },
         {
           "name": "system_ui",
-          "value": 8.4
+          "value": 8.35
         },
         {
           "name": "media_server",
-          "value": 5.9
+          "value": 5.92
         },
         {
           "name": "other process",
-          "value": 4.3
+          "value": 4.25
         },
         {
           "name": "idle",
-          "value": 62.3
+          "value": 62.34
         }
       ]
     },
@@ -52,27 +52,27 @@
       "items": [
         {
           "name": "render_service",
-          "value": 15.2
+          "value": 15.14
         },
         {
           "name": "system_ui",
-          "value": 11.6
+          "value": 11.55
         },
         {
           "name": "system_server",
-          "value": 7.4
+          "value": 7.39
         },
         {
           "name": "binder",
-          "value": 7.3
+          "value": 7.28
         },
         {
           "name": "other process",
-          "value": 9.9
+          "value": 10.02
         },
         {
           "name": "idle",
-          "value": 48.6
+          "value": 48.62
         }
       ]
     },
@@ -81,15 +81,15 @@
       "items": [
         {
           "name": "weixin",
-          "value": 17.4
+          "value": 17.43
         },
         {
           "name": "render_service",
-          "value": 16.4
+          "value": 16.45
         },
         {
           "name": "binder",
-          "value": 16
+          "value": 15.96
         },
         {
           "name": "system_ui",
@@ -97,11 +97,11 @@
         },
         {
           "name": "other process",
-          "value": 8.2
+          "value": 8.19
         },
         {
           "name": "idle",
-          "value": 33.9
+          "value": 33.87
         }
       ]
     }
@@ -112,31 +112,31 @@
       "items": [
         {
           "name": "worker_thread",
-          "value": 9.3
+          "value": 9.34
         },
         {
           "name": "render_thread",
-          "value": 7.6
+          "value": 7.64
         },
         {
           "name": "gpu_worker",
-          "value": 7.4
+          "value": 7.41
         },
         {
           "name": "jit_thread",
-          "value": 5.2
+          "value": 5.25
         },
         {
           "name": "other process",
-          "value": 4.3
+          "value": 4.25
         },
         {
           "name": "other thread",
-          "value": 3.9
+          "value": 3.77
         },
         {
           "name": "idle",
-          "value": 62.3
+          "value": 62.34
         }
       ]
     },
@@ -145,15 +145,15 @@
       "items": [
         {
           "name": "render_thread",
-          "value": 12.2
+          "value": 12.13
         },
         {
           "name": "gpu_worker",
-          "value": 9.8
+          "value": 9.79
         },
         {
           "name": "worker_thread",
-          "value": 7.3
+          "value": 7.24
         },
         {
           "name": "io_thread",
@@ -161,7 +161,7 @@
         },
         {
           "name": "other process",
-          "value": 9.9
+          "value": 10.02
         },
         {
           "name": "other thread",
@@ -169,7 +169,7 @@
         },
         {
           "name": "idle",
-          "value": 48.6
+          "value": 48.62
         }
       ]
     },
@@ -178,31 +178,31 @@
       "items": [
         {
           "name": "render_thread",
-          "value": 16.2
+          "value": 16.19
         },
         {
           "name": "main_thread",
-          "value": 12.3
+          "value": 12.34
         },
         {
           "name": "io_thread",
-          "value": 12.2
+          "value": 12.21
         },
         {
           "name": "gpu_worker",
-          "value": 9.9
+          "value": 9.96
         },
         {
           "name": "other process",
-          "value": 8.2
+          "value": 8.19
         },
         {
           "name": "other thread",
-          "value": 7.3
+          "value": 7.24
         },
         {
           "name": "idle",
-          "value": 33.9
+          "value": 33.87
         }
       ]
     }

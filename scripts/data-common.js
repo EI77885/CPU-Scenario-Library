@@ -133,8 +133,9 @@ export function normalizeMetricName(value) {
     .replace(/[\\/\s_-]+/gu, "");
 }
 
-export function round(value, digits = 1) {
-  return Number(value.toFixed(digits));
+export function round(value, digits = 2) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(digits)) : 0;
 }
 
 export function sortStackItems(items) {

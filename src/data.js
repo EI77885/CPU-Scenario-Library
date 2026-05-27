@@ -48,8 +48,9 @@ const baseScenarios = [
   ["应用", "抖音_video", "34.1.0", "同场景跨平台滑动播放", "Wi-Fi, 自动亮度, 15 分钟", "Kirin-Next", "KRN-2026.05.15", "/archive/douyin/video/kirin-next"],
 ];
 
-function round(value, digits = 1) {
-  return Number(value.toFixed(digits));
+function round(value, digits = 2) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(digits)) : 0;
 }
 
 function makeStack(names, seed, total = 100) {

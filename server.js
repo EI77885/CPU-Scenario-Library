@@ -81,34 +81,34 @@ function scenarioFull(db, scenarioId) {
     id: row.id,
     name: row.name,
     threadType: row.thread_type,
-    loadShare: row.load_share,
+    loadShare: round2(row.load_share),
   }));
   const hizeeScene = db.prepare("SELECT * FROM hizee_scene WHERE scenario_id = ?").get(scenarioId) || {};
   const hizeeClusters = all(db, "SELECT * FROM hizee_clusters WHERE scenario_id = ? ORDER BY rowid", [scenarioId]);
   return {
     ...scenario,
     loadInfo: {
-      clusterRunning: all(db, "SELECT * FROM load_cluster WHERE scenario_id = ? ORDER BY rowid", [scenarioId]).map((row) => ({ name: row.cluster, value: row.running })),
+      clusterRunning: all(db, "SELECT * FROM load_cluster WHERE scenario_id = ? ORDER BY rowid", [scenarioId]).map((row) => ({ name: row.cluster, value: round2(row.running) })),
       processRunning: clusters.map((cluster) => ({
         cluster,
-        items: all(db, "SELECT name, value FROM load_process WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]),
+        items: all(db, "SELECT name, value FROM load_process WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]).map(roundValueRow),
       })),
       threadRunning: clusters.map((cluster) => ({
         cluster,
-        items: all(db, "SELECT name, value FROM load_thread WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]),
+        items: all(db, "SELECT name, value FROM load_thread WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]).map(roundValueRow),
       })),
       hizeeRows: ["所有进程", "UI进程", "render service"].map((scope, index) => ({
         scope,
         littleRunning: runningForScope(hizeeClusters[0], index),
         midRunning: runningForScope(hizeeClusters[1], index),
         bigRunning: runningForScope(hizeeClusters[2], index),
-        littleFreq: hizeeClusters[0]?.avg_freq_mhz ?? 0,
-        midFreq: hizeeClusters[1]?.avg_freq_mhz ?? 0,
-        bigFreq: hizeeClusters[2]?.avg_freq_mhz ?? 0,
-        fps: hizeeScene.fps ?? 0,
-        ddrFreq: hizeeScene.ddr_freq_mhz ?? 0,
-        bandwidth: hizeeScene.bandwidth ?? 0,
-        latency: hizeeScene.latency ?? 0,
+        littleFreq: round2(hizeeClusters[0]?.avg_freq_mhz),
+        midFreq: round2(hizeeClusters[1]?.avg_freq_mhz),
+        bigFreq: round2(hizeeClusters[2]?.avg_freq_mhz),
+        fps: round2(hizeeScene.fps),
+        ddrFreq: round2(hizeeScene.ddr_freq_mhz),
+        bandwidth: round2(hizeeScene.bandwidth),
+        latency: round2(hizeeScene.latency),
       })),
     },
     topdownInfo: threads.map((thread) => buildTopdown(db, thread)),
@@ -124,16 +124,25 @@ function scenarioFull(db, scenarioId) {
 
 function runningForScope(row, index) {
   if (!row) return 0;
-  return [row.all_process_running, row.ui_process_running, row.render_service_running][index] || 0;
+  return round2([row.all_process_running, row.ui_process_running, row.render_service_running][index]);
+}
+
+function round2(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : 0;
+}
+
+function roundValueRow(row) {
+  return { ...row, value: round2(row.value) };
 }
 
 function buildTopdown(db, thread) {
   const rows = all(db, "SELECT * FROM topdown_metrics WHERE thread_id = ?", [thread.id]);
-  const level1 = (scope) => Object.fromEntries(topdownLevel1.map((metric) => [metric, rows.find((row) => row.scope === scope && row.level === 1 && row.metric === metric)?.value || 0]));
+  const level1 = (scope) => Object.fromEntries(topdownLevel1.map((metric) => [metric, round2(rows.find((row) => row.scope === scope && row.level === 1 && row.metric === metric)?.value)]));
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: thread.loadShare,
+    loadShare: round2(thread.loadShare),
     total: { level1: level1("total"), hierarchy: buildHierarchy(rows) },
     kernel: { level1: level1("kernel") },
   };
@@ -145,8 +154,8 @@ function buildHierarchy(rows) {
   return groupNames.map((metric) => {
     const level2 = nodes.filter((row) => row.level === 2 && row.parent === metric).map((row) => ({
       name: row.metric,
-      value: row.value,
-      level3: nodes.filter((child) => child.level === 3 && child.parent === row.metric).map((child) => ({ name: child.metric, value: child.value })),
+      value: round2(row.value),
+      level3: nodes.filter((child) => child.level === 3 && child.parent === row.metric).map((child) => ({ name: child.metric, value: round2(child.value) })),
     }));
     return { metric, unit: metric === "MPKI" ? "PKI" : "PKI", kind: metric.includes("PKI") && !["MPKI", "FE BOUND", "BE BOUND"].includes(metric) ? "diagnostic" : "", level2 };
   }).filter((group) => group.level2.length);
@@ -157,9 +166,9 @@ function buildInstruction(db, thread) {
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: thread.loadShare,
-    total: instructionEvents.map((event) => ({ name: event, value: rows.find((row) => row.scope === "total" && row.event === event)?.value || 0 })),
-    kernel: instructionEvents.map((event) => ({ name: event, value: rows.find((row) => row.scope === "kernel" && row.event === event)?.value || 0 })),
+    loadShare: round2(thread.loadShare),
+    total: instructionEvents.map((event) => ({ name: event, value: round2(rows.find((row) => row.scope === "total" && row.event === event)?.value) })),
+    kernel: instructionEvents.map((event) => ({ name: event, value: round2(rows.find((row) => row.scope === "kernel" && row.event === event)?.value) })),
   };
 }
 
@@ -168,9 +177,9 @@ function buildSyscall(db, thread) {
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: thread.loadShare,
-    density: metric.density || 0,
-    calls: all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]),
+    loadShare: round2(thread.loadShare),
+    density: round2(metric.density),
+    calls: all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]).map(roundValueRow),
   };
 }
 
@@ -181,12 +190,12 @@ function buildHotspots(db, scenarioId, dimension, threads) {
     return {
       name: thread.name,
       threadType: thread.threadType,
-      loadShare: thread.loadShare,
-      score: row.score,
+      loadShare: round2(thread.loadShare),
+      score: round2(row.score),
       sos: all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank", [row.id]).map((so) => ({
         name: so.name,
-        value: so.value,
-        funcs: all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]),
+        value: round2(so.value),
+        funcs: all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]).map(roundValueRow),
       })),
     };
   });
@@ -281,7 +290,7 @@ function trendResponse(db, query) {
   }).filter((row) => row.value > 0).sort((a, b) => b.value - a.value);
   return {
     feature: featureMeta,
-    average: rows.length ? Number((rows.reduce((sum, row) => sum + row.value, 0) / rows.length).toFixed(1)) : 0,
+    average: rows.length ? round2(rows.reduce((sum, row) => sum + row.value, 0) / rows.length) : 0,
     rows,
   };
 }
@@ -290,7 +299,7 @@ function metricValue(scenario, key, thread) {
   if (key.startsWith("cluster.")) {
     const [, index, stateName] = key.split(".");
     const running = scenario.loadInfo.clusterRunning[Number(index)]?.value || 0;
-    return stateName === "idle" ? Number((100 - running).toFixed(1)) : running;
+    return stateName === "idle" ? round2(100 - running) : round2(running);
   }
   if (key.startsWith("process.")) {
     const name = key.slice("process.".length);
@@ -338,7 +347,7 @@ function metricValue(scenario, key, thread) {
 }
 
 function avg(values) {
-  return values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)) : 0;
+  return values.length ? round2(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
 }
 
 function findTopdownNodeValue(groups, name) {

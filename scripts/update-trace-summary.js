@@ -393,13 +393,13 @@ function selectTop80(map, runningNs) {
 
 function percentItems(selected, totalNs) {
   const total = Math.max(totalNs, 1);
-  return selected.map((item) => ({ name: item.name, value: round((item.ns / total) * 100, 1) }));
+  return selected.map((item) => ({ name: item.name, value: round((item.ns / total) * 100) }));
 }
 
 function topProcessItems(bucket, totalNs, idle) {
   const processSelection = selectTop80(bucket.processNs, bucket.runningNs);
   const out = percentItems(processSelection.selected, totalNs);
-  if (processSelection.otherNs > 0) out.push({ name: "other process", value: round((processSelection.otherNs / Math.max(totalNs, 1)) * 100, 1) });
+  if (processSelection.otherNs > 0) out.push({ name: "other process", value: round((processSelection.otherNs / Math.max(totalNs, 1)) * 100) });
   out.push({ name: "idle", value: idle });
   return { items: out, selectedProcesses: processSelection.selected, selectedProcessNs: processSelection.selectedNs, otherProcessNs: processSelection.otherNs };
 }
@@ -414,8 +414,8 @@ function inheritedThreadItems(bucket, totalNs, processSelection, idle) {
   }
   const threadSelection = selectTop80(threadMap, processSelection.selectedProcessNs);
   const out = percentItems(threadSelection.selected, totalNs);
-  if (threadSelection.otherNs > 0) out.push({ name: "other thread", value: round((threadSelection.otherNs / Math.max(totalNs, 1)) * 100, 1) });
-  if (processSelection.otherProcessNs > 0) out.push({ name: "other process", value: round((processSelection.otherProcessNs / Math.max(totalNs, 1)) * 100, 1) });
+  if (threadSelection.otherNs > 0) out.push({ name: "other thread", value: round((threadSelection.otherNs / Math.max(totalNs, 1)) * 100) });
+  if (processSelection.otherProcessNs > 0) out.push({ name: "other process", value: round((processSelection.otherProcessNs / Math.max(totalNs, 1)) * 100) });
   out.push({ name: "idle", value: idle });
   return out;
 }
@@ -427,8 +427,8 @@ function buildSummary(acc, scenarioId) {
   for (const cluster of clusters) {
     const bucket = ensureCluster(acc, cluster);
     const totalNs = acc.totalNsByCluster.get(cluster) || bucket.runningNs;
-    const running = totalNs > 0 ? round((bucket.runningNs / totalNs) * 100, 1) : 0;
-    const idle = round(Math.max(0, 100 - running), 1);
+    const running = totalNs > 0 ? round((bucket.runningNs / totalNs) * 100) : 0;
+    const idle = round(Math.max(0, 100 - running));
     clusterOverview.push({ cluster, running, idle });
     const processSelection = topProcessItems(bucket, totalNs, idle);
     processOverview.push({

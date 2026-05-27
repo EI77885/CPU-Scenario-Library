@@ -88,7 +88,7 @@ function toFiniteNumber(value) {
 
 function displayValue(value, suffix = "") {
   const number = toFiniteNumber(value);
-  return number == null ? "NA" : `${number}${suffix}`;
+  return number == null ? "NA" : `${roundTwo(number).toFixed(2)}${suffix}`;
 }
 
 function displayText(value) {
@@ -388,7 +388,7 @@ function renderTrendPage() {
       detail: scenario.base.platform,
       value: getMetricValue(scenario, metric.key, state.threadTypes),
     }))).filter((row) => toFiniteNumber(row.value) > 0).sort((a, b) => toFiniteNumber(b.value) - toFiniteNumber(a.value));
-  const averageValue = trendRows.length ? Number((trendRows.reduce((sum, row) => sum + toFiniteNumber(row.value), 0) / trendRows.length).toFixed(1)) : null;
+  const averageValue = trendRows.length ? roundTwo(trendRows.reduce((sum, row) => sum + toFiniteNumber(row.value), 0) / trendRows.length) : null;
   const snapshotKey = getTrendSnapshotKey(metric, trendRows);
   const isSaved = state.savedTrends.some((snapshot) => snapshot.key === snapshotKey);
   return h("div", { class: "page-grid" }, [
@@ -565,7 +565,7 @@ function renderThreadTypeFilter() {
 function getMetricValue(scenario, key, threadTypes) {
   const avg = (items) => {
     const values = items.map(toFiniteNumber).filter((value) => value != null);
-    return values.length ? Number((values.reduce((sum, item) => sum + item, 0) / values.length).toFixed(1)) : null;
+    return values.length ? roundTwo(values.reduce((sum, item) => sum + item, 0) / values.length) : null;
   };
   const selectedThreadValues = (items, getter) => {
     const safeItems = asArray(items);
@@ -577,7 +577,7 @@ function getMetricValue(scenario, key, threadTypes) {
     const [, index, stateName] = key.split(".");
     const running = toFiniteNumber(asArray(loadInfo.clusterRunning)[Number(index)]?.value);
     if (running == null) return null;
-    return stateName === "idle" ? roundOne(100 - running) : running;
+    return stateName === "idle" ? roundTwo(100 - running) : roundTwo(running);
   }
   if (key.startsWith("process.")) {
     const name = key.slice("process.".length);
@@ -736,7 +736,7 @@ function clusterStateRows(items) {
     ]),
     ...asArray(items).map((item) => {
       const running = toFiniteNumber(item.value);
-      const idle = running == null ? null : roundOne(100 - running);
+      const idle = running == null ? null : roundTwo(100 - running);
       const states = [
         { name: "running", value: running },
         { name: "idle", value: idle },
@@ -811,9 +811,9 @@ function stackColor(name, index) {
   return fixed[name] || colors[index % colors.length];
 }
 
-function roundOne(value) {
+function roundTwo(value) {
   const number = toFiniteNumber(value);
-  return number == null ? null : Number(number.toFixed(1));
+  return number == null ? null : Number(number.toFixed(2));
 }
 
 function dualMetricBars(total, kernel, unit) {

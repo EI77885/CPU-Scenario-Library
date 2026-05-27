@@ -602,9 +602,12 @@ TOPDOWN、指令分布、系统调用、热点与瓶颈 SO/函数均按线程级
 - 每个场景目录下均有同级 `hitrace/`，后续真实 trace 放在该目录；v1 使用 `hitrace/trace_summary.json` 模拟 trace 三视图解析产物。该 JSON 文件名不绑定具体来源，后续 Android 或鸿蒙 trace 解析器只要输出同结构数据即可接入。
 - `scripts/update-trace-summary.js` 会扫描 `hitrace/` 下的 Perfetto/proto 二进制 trace、systrace/atrace/OpenHarmony HiTrace/ftrace 文本和 Chrome Trace JSON，统一生成 `trace_summary.json`。二进制 Perfetto 解析依赖外部 `trace_processor_shell`；文本 trace 主要解析 `sched_switch`，已兼容 `=`/`:` 字段分隔、`[002]`/`cpu_id=2`/`C02` CPU 标记等常见鸿蒙文本格式。
 - `source_data` 中的 xlsx 已按目标环境改为单 sheet 布局，基础信息、负载信息、TOPDOWN、指令分布、系统调用、热点 SO/函数都在同一个 sheet 内分段排列。
+- 示例 xlsx 已进一步贴近用户截图：同一个 `demo` sheet 中按截图相对位置排列基础信息、负载三视图区域、Hizee 表、横向 TOPDOWN 块、指令分布、系统调用、热点/Bound SO 函数三层树，并写入 `mergeCells`。导入器会解析合并单元格，把左上角值传播到合并区域，避免 XML 读取时上下文丢失。
 - 导入脚本默认是增量导入：按 `分类目录 + 场景名称` 生成稳定场景 id，对已存在场景先清理该场景的子表数据再 upsert 主表，不会重建整个数据库。
+- 从 Excel 数据表中解析出的数值在入库前统一四舍五入到两位小数，百分比也按两位小数保存；API 聚合值和前端展示同样固定为两位小数。
 - 如需全量重建，可显式执行 `node scripts/import-source-data.js --reset`。
 - 单 sheet 解析依赖关键词和事件名归一化，不依赖固定单元格坐标；可识别示例图中的 `CLUSTER LOAD OVERVIEW`、`TOPDOWN`、`指令分布`、`系统调用`、`Library:`、`Function:` 等分段。
+- PMU 名称映射只内置高置信别名，如 `FE_PKI/FE/FRONTEND_BOUND -> FE BOUND`、`BE_PKI/BE/BACKEND_BOUND -> BE BOUND` 以及常见 cache/tlb/stall/branch 事件的写法变体；不确定的名称不会猜测，会在导入 warning 中输出 `Unresolved topdown metric alias ...` 供确认。
 
 本地访问：
 

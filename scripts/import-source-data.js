@@ -25,6 +25,49 @@ const strictMode = args.strict;
 const debugMode = args.debug;
 
 const metricNameMap = new Map([...topdownLevel1, ...topdownNodes].map((name) => [normalizeMetricName(name), name]));
+const topdownAliases = {
+  FE: "FE BOUND",
+  FRONTEND: "FE BOUND",
+  FRONTENDBOUND: "FE BOUND",
+  FETCHBOUND: "FE BOUND",
+  FETCHSTALL: "FE BOUND",
+  STALLFRONTEND: "FE BOUND",
+  BE: "BE BOUND",
+  BACKEND: "BE BOUND",
+  BACKENDBOUND: "BE BOUND",
+  EXECUTIONBOUND: "BE BOUND",
+  STALLBACKEND: "BE BOUND",
+  BADINSTSPECULATION: "BAD_INST_SPEC",
+  BADINSTRUCTIONSPEC: "BAD_INST_SPEC",
+  BRIMMISPRETIRED: "BR_IMMED_MIS_PRED_RETIRED",
+  BRIMMEDMISPRETIRED: "BR_IMMED_MIS_PRED_RETIRED",
+  BRCONDMISPREDRETIRED: "BR_COND_MID_PRED_RETIRED",
+  BRCONDMIDPREDRETIRED: "BR_COND_MID_PRED_RETIRED",
+  BRINDMISPREDRETIRED: "BR_IND_MIS_PRED_RETIRED",
+  BRINDIRECTMISPREDRETIRED: "BR_IND_MIS_PRED_RETIRED",
+  BRINDNRMISPREDRETIRED: "BR_INDNR_MIS_PRED_RETIRED",
+  STALLFRONTENDMEMBOUND: "STALL_FRONTEND_MEMBOUND",
+  STALLFRONTENDMEM: "STALL_FRONTEND_MEM",
+  STALLFRONTENDL1I: "STALL_FRONTEND_L1I",
+  STALLFRONTENDTLB: "STALL_FRONTEND_TLB",
+  STALLFRONTENDCPUBOUND: "STALL_FRONTEND_CPUBOUND_PKI",
+  FRONTENDCPUBOUND: "STALL_FRONTEND_CPUBOUND_PKI",
+  STALLBACKENDMEMBOUND: "STALL_BACKEND_MEMBOUND",
+  STALLBACKENDMEM: "STALL_BACKEND_MEM",
+  STALLBACKENDL1D: "STALL_BACKEND_L1D",
+  STALLBACKENDTLB: "STALL_BACKEND_TLB",
+  STALLBACKENDST: "STALL_BACKEND_ST",
+  STALLBACKENDBUSY: "STALL_BACKEND_BUSY",
+  STALLBACKENDILOCK: "STALL_BACKEND_ILOCK",
+  L1DCACHEREFILL: "L1D_CACHE_REFILL",
+  L1ICACHEREFILL: "L1I_CACHE_REFILL",
+  L2DCACHEREFILL: "L2D_CACHE_REFILL",
+  L2ICACHEREFILL: "L2I_CACHE_REFILL",
+  L3DCACHEREFILL: "L3D_CACHE_REFILL",
+};
+for (const [alias, canonical] of Object.entries(topdownAliases)) {
+  metricNameMap.set(normalizeMetricName(alias), canonical);
+}
 const instructionNameMap = new Map(instructionEvents.map((name) => [normalizeMetricName(name), name]));
 const threadOrder = ["main", "main", "render", "render", "other", "other"];
 const scopeOrder = ["total", "kernel", "total", "kernel", "total", "kernel"];
@@ -90,6 +133,10 @@ function columnIndex(ref) {
   return [...letters].reduce((sum, char) => sum * 26 + char.charCodeAt(0) - 64, 0) - 1;
 }
 
+function rowNumber(ref) {
+  return Number(ref.match(/\d+/u)?.[0] || 1) - 1;
+}
+
 function parseSharedStrings(xlsxPath) {
   const xml = unzipText(xlsxPath, "xl/sharedStrings.xml", true);
   if (!xml) return [];
@@ -120,7 +167,27 @@ function parseSheet(xml, sharedStrings = []) {
     }
     rows[rowIndex] = row;
   }
+  applyMergedCells(rows, xml);
   return normalizeRows(rows);
+}
+
+function applyMergedCells(rows, xml) {
+  for (const match of xml.matchAll(/<mergeCell\b[^>]*\bref="([A-Z]+\d+):([A-Z]+\d+)"[^>]*\/?>/gu)) {
+    const start = match[1];
+    const end = match[2];
+    const startRow = rowNumber(start);
+    const endRow = rowNumber(end);
+    const startCol = columnIndex(start);
+    const endCol = columnIndex(end);
+    const value = rows[startRow]?.[startCol];
+    if (value === undefined || value === "") continue;
+    for (let r = startRow; r <= endRow; r += 1) {
+      if (!rows[r]) rows[r] = [];
+      for (let c = startCol; c <= endCol; c += 1) {
+        if (rows[r][c] === undefined || rows[r][c] === "") rows[r][c] = value;
+      }
+    }
+  }
 }
 
 function coerceCell(raw) {
@@ -258,15 +325,20 @@ function canonicalInstructionName(value) {
 }
 
 function numberFrom(value) {
-  if (typeof value === "number") return value;
+  if (typeof value === "number") return round2(value);
   const match = clean(value).replace(/,/gu, "").match(/-?\d+(?:\.\d+)?/u);
-  return match ? Number(match[0]) : 0;
+  return match ? round2(Number(match[0])) : 0;
+}
+
+function round2(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : 0;
 }
 
 function boundedNumber(value, min = 0, max = 100) {
   const number = numberFrom(value);
   if (!Number.isFinite(number)) return min;
-  return Math.min(max, Math.max(min, number));
+  return round2(Math.min(max, Math.max(min, number)));
 }
 
 function percentFrom(value) {
@@ -280,7 +352,7 @@ function syscallFromText(value, rank) {
     rank,
     number: Number(match[1]),
     name: match[2],
-    share: Number(match[3]),
+    share: round2(Number(match[3])),
   };
 }
 
@@ -429,14 +501,14 @@ function ensureThread(threadMap, scenarioId, threadName, threadType, loadShare =
   const id = threadId(scenarioId, type);
   const existingById = [...threadMap.values()].find((thread) => thread.id === id);
   if (existingById && !threadMap.has(name)) {
-    if (loadShare && !existingById.loadShare) existingById.loadShare = Number(loadShare);
+    if (loadShare && !existingById.loadShare) existingById.loadShare = round2(loadShare);
     threadMap.set(name, existingById);
     return existingById;
   }
   if (!threadMap.has(name)) {
-    threadMap.set(name, { id, name, type, loadShare: Number(loadShare) || 0, rank: threadMap.size + 1 });
+    threadMap.set(name, { id, name, type, loadShare: round2(loadShare), rank: threadMap.size + 1 });
   } else if (loadShare && !threadMap.get(name).loadShare) {
-    threadMap.get(name).loadShare = Number(loadShare);
+    threadMap.get(name).loadShare = round2(loadShare);
   }
   return threadMap.get(name);
 }
@@ -624,7 +696,7 @@ function parseOneSheet(rows, scenarioId, base, warnings) {
   const sections = locateSections(normalizedRows);
   if (debugMode) console.warn(`[debug] ${scenarioId} one-sheet sections: ${JSON.stringify(sections)}, rows=${normalizedRows.length}`);
   safeParse(warnings, scenarioId, "hizee", () => parseOneSheetHizee(normalizedRows, sections, parsed));
-  safeParse(warnings, scenarioId, "topdown", () => parseOneSheetTopdown(normalizedRows, sections, parsed, scenarioId));
+  safeParse(warnings, scenarioId, "topdown", () => parseOneSheetTopdown(normalizedRows, sections, parsed, scenarioId, warnings));
   safeParse(warnings, scenarioId, "instructions", () => parseOneSheetInstructions(normalizedRows, sections, parsed, scenarioId));
   safeParse(warnings, scenarioId, "syscalls", () => parseOneSheetSyscalls(normalizedRows, sections, parsed, scenarioId));
   safeParse(warnings, scenarioId, "hotspots", () => parseOneSheetHotspots(normalizedRows, sections, parsed, scenarioId));
@@ -705,35 +777,62 @@ function valueAtOrNear(row, index, label) {
   return firstPercentNear(row, label);
 }
 
-function parseOneSheetTopdown(rows, sections, parsed, scenarioId) {
+function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
   const safe = safeRows(rows);
   const start = sections.topdown ?? safe.findIndex((row) => row.some((cell) => isKnownTopdown(cell)));
   const end = firstSectionAfter(sections, start, ["instructions", "syscalls", "hotspots"]) ?? safe.length;
   if (start < 0) return;
   let block = -1;
   let currentThread = null;
+  let columnHeaders = [];
+  let columnScopes = [];
+  const unresolved = new Set();
   for (const row of safe.slice(Math.max(0, start), end)) {
-    const threadHeader = detectThreadHeader(row);
-    if (threadHeader) {
+    const threadHeaders = detectThreadHeaders(row);
+    if (threadHeaders.length > 1) {
+      columnHeaders = threadHeaders.map((header, index) => {
+        const threadType = header.threadType || (threadHeaders.length === 3 ? inferThreadType(header.name, index) : threadOrder[index]) || inferThreadType(header.name, parsed.threads.size);
+        const scope = header.scope || scopeOrder[index] || "total";
+        const thread = ensureThread(parsed.threads, scenarioId, header.name, threadType);
+        return { ...header, thread, scope };
+      });
+      continue;
+    }
+    if (columnHeaders.length) {
+      const scopeHeaders = detectScopeHeaders(row);
+      if (scopeHeaders.length) {
+        columnScopes = scopeHeaders;
+        continue;
+      }
+    }
+    const threadHeader = threadHeaders[0];
+    if (threadHeader && !columnHeaders.length) {
       block += 1;
       const threadType = threadHeader.threadType || threadOrder[block] || inferThreadType(threadHeader.name, parsed.threads.size);
       const scope = threadHeader.scope || scopeOrder[block] || "total";
       currentThread = ensureThread(parsed.threads, scenarioId, threadHeader.name, threadType);
       currentThread.currentScope = scope;
     }
-    const pairs = metricPairs(row, isKnownTopdown);
+    const pairs = metricPairsDetailed(row, isKnownTopdown);
+    for (const candidate of unresolvedMetricCandidates(row, isKnownTopdown)) unresolved.add(candidate);
     if (!pairs.length) continue;
-    if (!currentThread) {
-      block += 1;
-      const type = threadOrder[block] || "main";
-      currentThread = ensureThread(parsed.threads, scenarioId, `${type}_thread`, type);
-      currentThread.currentScope = scopeOrder[block] || "total";
-    }
     for (const pair of pairs) {
+      const header = columnHeaders.length ? headerForColumn(columnHeaders, pair.column) : null;
+      if (!header && !currentThread) {
+        block += 1;
+        const type = threadOrder[block] || "main";
+        currentThread = ensureThread(parsed.threads, scenarioId, `${type}_thread`, type);
+        currentThread.currentScope = scopeOrder[block] || "total";
+      }
+      const targetThread = header?.thread || currentThread;
+      const scope = pair.scope || scopeForColumn(columnScopes, pair.column) || header?.scope || currentThread?.currentScope || "total";
       const metric = canonicalTopdownName(pair.name);
       const level = topdownLevel1.includes(metric) ? 1 : 2;
-      parsed.topdown.push({ threadId: currentThread.id, scope: currentThread.currentScope || "total", level, metric, parent: "", value: pair.value });
+      parsed.topdown.push({ threadId: targetThread.id, scope, level, metric, parent: topdownParent(metric), value: pair.value });
     }
+  }
+  if (unresolved.size) {
+    warnings.push(`Unresolved topdown metric alias for ${scenarioId}: ${[...unresolved].slice(0, 20).join(", ")}${unresolved.size > 20 ? " ..." : ""}`);
   }
 }
 
@@ -746,7 +845,7 @@ function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
   for (const row of safe.slice(start, end)) {
     const threadHeader = detectThreadHeader(row);
     if (threadHeader) currentThread = ensureThread(parsed.threads, scenarioId, threadHeader.name, threadHeader.threadType);
-    const pairs = metricPairs(row, isKnownInstruction);
+    const pairs = metricPairsDetailed(row, isKnownInstruction);
     if (!pairs.length) continue;
     if (!currentThread) currentThread = ensureThread(parsed.threads, scenarioId, "main_thread", "main");
     const splitAt = Math.ceil(pairs.length / 2);
@@ -818,23 +917,92 @@ function firstSectionAfter(sections, start, names) {
 }
 
 function detectThreadHeader(row) {
+  return detectThreadHeaders(row)[0] || null;
+}
+
+function detectThreadHeaders(row) {
   const text = rowText(row);
-  if (/TOPDOWN|指令分布|系统调用|热点|BOUND SO|Library:|Function:/iu.test(text)) return null;
-  const cell = normalizeRow(row).map(clean).find((item) => /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity/iu.test(item) && !isKnownTopdown(item) && !isKnownInstruction(item));
-  if (!cell) return null;
-  const scope = /kernel|内核/iu.test(text) ? "kernel" : /all|总体/iu.test(text) ? "total" : "";
-  return { name: cell.replace(/[-_ ]*(all|kernel|总体|内核).*$/iu, "").replace(/线程$/u, "").trim() || cell, threadType: "", scope };
+  if (/TOPDOWN|指令分布|系统调用|热点|BOUND SO|Library:|Function:/iu.test(text)) return [];
+  const headers = [];
+  let lastKey = "";
+  normalizeRow(row).map(clean).forEach((cell, column) => {
+    if (!/线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity/iu.test(cell)) return;
+    if (isKnownTopdown(cell) || isKnownInstruction(cell)) return;
+    const scope = /kernel|内核/iu.test(cell) ? "kernel" : /all|总体/iu.test(cell) ? "total" : "";
+    const name = cell.replace(/[-_ ]*(all|kernel|总体|内核).*$/iu, "").replace(/线程$/u, "").trim() || cell;
+    const key = `${name}:${scope}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    headers.push({ name, threadType: "", scope, column });
+  });
+  return headers;
+}
+
+function headerForColumn(headers, column) {
+  return [...headers].reverse().find((header) => header.column <= column) || headers[0] || null;
+}
+
+function detectScopeHeaders(row) {
+  const headers = [];
+  let lastScope = "";
+  normalizeRow(row).map(clean).forEach((cell, column) => {
+    const scope = /^kernel$/iu.test(cell) || /^内核$/u.test(cell) ? "kernel" : /^(all|总体)$/iu.test(cell) ? "total" : "";
+    if (!scope || scope === lastScope) return;
+    lastScope = scope;
+    headers.push({ scope, column });
+  });
+  return headers;
+}
+
+function scopeForColumn(headers, column) {
+  return [...headers].reverse().find((header) => header.column <= column)?.scope || "";
 }
 
 function metricPairs(row, predicate) {
+  return metricPairsDetailed(row, predicate).map(({ name, value, scope }) => ({ name, value, scope }));
+}
+
+function metricPairsDetailed(row, predicate) {
   const pairs = [];
   const cells = normalizeRow(row);
   for (let c = 0; c < cells.length; c += 1) {
     if (!predicate(cells[c])) continue;
     const value = cells.slice(c + 1, Math.min(cells.length, c + 4)).find((cell) => typeof cell === "number" || /^-?\d+(?:\.\d+)?$/u.test(clean(cell)));
-    if (value !== undefined) pairs.push({ name: cells[c], value: Number(value), scope: "" });
+    if (value !== undefined) pairs.push({ name: cells[c], value: round2(value), scope: "", column: c });
   }
   return pairs;
+}
+
+function unresolvedMetricCandidates(row, predicate) {
+  const out = [];
+  const cells = normalizeRow(row);
+  for (let c = 0; c < cells.length; c += 1) {
+    const cell = clean(cells[c]);
+    if (!cell || predicate(cell) || !looksLikePmuMetric(cell)) continue;
+    const value = cells.slice(c + 1, Math.min(cells.length, c + 4)).find((item) => typeof item === "number" || /^-?\d+(?:\.\d+)?$/u.test(clean(item)));
+    if (value !== undefined) out.push(cell);
+  }
+  return out;
+}
+
+function looksLikePmuMetric(value) {
+  const text = clean(value);
+  if (!/^[A-Z0-9_/\-.\s]+$/u.test(text)) return false;
+  return /(PKI|SPEC|STALL|CACHE|TLB|REFILL|MEM|BR_|LD|IPC|MPKI|FE|BE)/iu.test(text);
+}
+
+function topdownParent(metric) {
+  if (topdownLevel1.includes(metric)) return "";
+  if (/^(BAD_|BR_)/u.test(metric)) return "MPKI";
+  if (/^STALL_FRONTEND_(L1I|MEM|TLB)$/u.test(metric)) return "STALL_FRONTEND_MEMBOUND";
+  if (/^STALL_FRONTEND_(FLOW|FLUSH|RENAME)$/u.test(metric)) return "STALL_FRONTEND_CPUBOUND_PKI";
+  if (/^STALL_FRONTEND/u.test(metric)) return "FE BOUND";
+  if (/^STALL_BACKEND_(L1D|MEM|TLB|ST)$/u.test(metric)) return "STALL_BACKEND_MEMBOUND";
+  if (/^STALL_BACKEND/u.test(metric)) return "BE BOUND";
+  if (/^MEMSTALL/u.test(metric)) return "LINX MEMSTALL PKI";
+  if (/TLB|PRFM|HWPRF|PAGE_FAULT/u.test(metric)) return "TLB REFILL & PREFETCH PKI";
+  if (/CACHE_REFILL/u.test(metric)) return "CACHE REFILL PKI";
+  return "";
 }
 
 function isKnownTopdown(value) {
@@ -853,7 +1021,7 @@ function parseNamedPercent(value) {
 function parseSyscallCalls(calls) {
   const parsed = (Array.isArray(calls) ? calls : []).map((value, index) => syscallFromText(value, index + 1)).filter(Boolean);
   const total = parsed.reduce((sum, call) => sum + call.share, 0);
-  if (total < 99.95) parsed.push({ rank: parsed.length + 1, number: 0, name: "others", share: Number((100 - total).toFixed(1)) });
+  if (total < 99.995) parsed.push({ rank: parsed.length + 1, number: 0, name: "others", share: round2(100 - total) });
   return parsed;
 }
 
@@ -893,14 +1061,21 @@ async function importTraceSummary(statements, scenarioId, hitraceDir, warnings) 
 function importHizeeRows(statements, scenarioId, hizee) {
   for (const row of hizee.clusters) {
     if (!row.cluster) continue;
-    statements.hizeeCluster.run(scenarioId, row.cluster, Number(row.avgFreqMhz) || 0, Number(row.allProcess) || 0, Number(row.uiProcess) || 0, Number(row.renderService) || 0);
+    statements.hizeeCluster.run(
+      scenarioId,
+      row.cluster,
+      round2(numberFrom(row.avgFreqMhz)),
+      round2(percentFrom(row.allProcess)),
+      round2(percentFrom(row.uiProcess)),
+      round2(percentFrom(row.renderService)),
+    );
   }
   statements.hizeeScene.run(
     scenarioId,
-    Number(hizee.scene.fps) || 0,
-    Number(hizee.scene.ddrFreqMhz) || 0,
-    Number(hizee.scene.bandwidth) || 0,
-    Number(hizee.scene.latency) || 0,
+    round2(numberFrom(hizee.scene.fps)),
+    round2(numberFrom(hizee.scene.ddrFreqMhz)),
+    round2(numberFrom(hizee.scene.bandwidth)),
+    round2(numberFrom(hizee.scene.latency)),
   );
 }
 
@@ -911,9 +1086,9 @@ function importSyscallRows(statements, syscalls) {
     byThread.set(row.threadId, row);
   }
   for (const row of byThread.values()) {
-    statements.syscallMetric.run(row.threadId, Number(row.density) || 0);
+    statements.syscallMetric.run(row.threadId, round2(row.density));
     for (const call of row.calls) {
-      statements.syscallTop.run(row.threadId, call.rank, call.number, call.name, call.share);
+      statements.syscallTop.run(row.threadId, call.rank, call.number, call.name, round2(call.share));
     }
   }
 }
@@ -924,10 +1099,10 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
     const thread = [...threadMap.values()].find((item) => item.id === row.threadId);
     if (!thread || !row.soName || !row.functionName) continue;
     const groupKey = `${row.dimension}:${thread.id}`;
-    if (!groups.has(groupKey)) groups.set(groupKey, { dimension: row.dimension, thread, score: Number(row.threadScore), sos: new Map() });
+    if (!groups.has(groupKey)) groups.set(groupKey, { dimension: row.dimension, thread, score: round2(row.threadScore), sos: new Map() });
     const group = groups.get(groupKey);
-    if (!group.sos.has(row.soName)) group.sos.set(row.soName, { name: row.soName, value: Number(row.soValue), functions: [] });
-    group.sos.get(row.soName).functions.push({ name: row.functionName, value: Number(row.functionValue) });
+    if (!group.sos.has(row.soName)) group.sos.set(row.soName, { name: row.soName, value: round2(row.soValue), functions: [] });
+    group.sos.get(row.soName).functions.push({ name: row.functionName, value: round2(row.functionValue) });
   }
   for (const [groupIndex, group] of [...groups.values()].entries()) {
     const htId = `${scenarioId}-${group.dimension}-${group.thread.type}-${groupIndex + 1}`;
