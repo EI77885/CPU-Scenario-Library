@@ -953,15 +953,95 @@ function parseOneSheetSyscalls(rows, sections, parsed, scenarioId) {
   const header = safe.slice(start, Math.min(end, start + 3)).find((row) => row.some((cell) => /线程|thread/iu.test(clean(cell))) && row.some((cell) => /密度|density/iu.test(clean(cell)))) || [];
   const threadCol = header.findIndex((cell) => /线程|thread/iu.test(clean(cell)));
   const densityCol = header.findIndex((cell) => /密度|density/iu.test(clean(cell)));
+  const topCol = firstSyscallTopColumn(header);
   for (const row of safe.slice(start, end)) {
     const cells = normalizeRow(row).map(clean);
-    const callCells = cells.filter((cell) => syscallFromText(cell, 1));
-    if (!callCells.length) continue;
-    const name = clean(row[threadCol]) || cells.find((cell) => cell && /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity/iu.test(cell) && !cell.includes("系统调用") && !cell.includes("TOP") && !syscallFromText(cell, 1)) || `thread_${parsed.threads.size + 1}`;
+    if (isSyscallHeaderLikeRow(cells)) continue;
+    const calls = parseSyscallRowCalls(cells, topCol >= 0 ? topCol : Math.max(threadCol, densityCol) + 1);
+    if (!calls.length) continue;
+    const name = syscallThreadName(row, cells, threadCol, densityCol) || `thread_${parsed.threads.size + 1}`;
     const thread = ensureThread(parsed.threads, scenarioId, name, "");
-    const density = densityCol >= 0 ? numberFrom(row[densityCol]) : row.find((cell) => typeof cell === "number" && cell > 0) || 0;
-    parsed.syscalls.push({ threadId: thread.id, density: numberFrom(density), calls: parseSyscallCalls(callCells) });
+    const density = syscallDensity(row, densityCol, threadCol, topCol);
+    parsed.syscalls.push({ threadId: thread.id, density, calls });
   }
+}
+
+function firstSyscallTopColumn(header) {
+  return normalizeRow(header).findIndex((cell) => /TOP\s*\d|系统调用.*占比|占比/iu.test(clean(cell)));
+}
+
+function isSyscallHeaderLikeRow(cells) {
+  const text = cells.filter(Boolean).join(" ");
+  return /系统调用\s*$|系统调用信息|线程名|系统调用密度|TOP\s*\d/iu.test(text) && !cells.some((cell) => syscallFromText(cell, 1));
+}
+
+function syscallThreadName(row, cells, threadCol, densityCol) {
+  const direct = threadCol >= 0 ? clean(row[threadCol]) : "";
+  if (direct && !/线程名|thread\s*name/iu.test(direct) && !syscallFromText(direct, 1)) return direct;
+  const maxCol = densityCol >= 0 ? densityCol : cells.length;
+  const beforeDensity = cells.slice(0, maxCol).find((cell) => looksLikeSyscallThread(cell));
+  if (beforeDensity) return beforeDensity;
+  return cells.find((cell) => looksLikeSyscallThread(cell) && !syscallFromText(cell, 1)) || "";
+}
+
+function looksLikeSyscallThread(value) {
+  const text = clean(value);
+  return !!text && /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(text) && !/系统调用|TOP|密度|density/iu.test(text);
+}
+
+function syscallDensity(row, densityCol, threadCol, topCol) {
+  if (densityCol >= 0) return numberFrom(row[densityCol]);
+  const cells = normalizeRow(row);
+  const searchStart = Math.max(0, threadCol + 1);
+  const searchEnd = topCol >= 0 ? topCol - 1 : Math.min(cells.length - 1, searchStart + 3);
+  const nearHeader = firstNumberInRangeOrNull(cells, searchStart, searchEnd, (num) => num >= 0 && num < 100000);
+  if (nearHeader != null) return nearHeader;
+  const beforeCalls = cells.find((cell) => clean(cell) && !syscallFromText(cell, 1) && numberFrom(cell) > 0);
+  return numberFrom(beforeCalls);
+}
+
+function parseSyscallRowCalls(cells, startCol = 0) {
+  const source = normalizeRow(cells).slice(Math.max(0, startCol)).map(clean);
+  const parsed = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const compact = syscallFromText(source[i], parsed.length + 1);
+    if (compact) {
+      parsed.push(compact);
+      continue;
+    }
+    const split = syscallFromSplitCells(source, i, parsed.length + 1);
+    if (split) {
+      parsed.push(split.call);
+      i += split.consumed - 1;
+    }
+  }
+  const total = parsed.reduce((sum, call) => sum + call.share, 0);
+  if (parsed.length && total < 99.995) parsed.push({ rank: parsed.length + 1, number: 0, name: "others", share: round2(100 - total) });
+  return parsed;
+}
+
+function syscallFromSplitCells(cells, index, rank) {
+  const first = clean(cells[index]);
+  const second = clean(cells[index + 1]);
+  const third = clean(cells[index + 2]);
+  if (!first) return null;
+  const hasPercent = /%/u.test(first) || /%/u.test(second) || /%/u.test(third);
+  if (!hasPercent) return null;
+  if (/^[A-Za-z_][\w./-]*$/u.test(first)) {
+    return { consumed: 2, call: { rank, number: rank, name: first, share: round2(numberFrom(second)) } };
+  }
+  if (/^\d+(?:\.\d+)?$/u.test(first) && /^[A-Za-z_][\w./-]*$/u.test(second)) {
+    return { consumed: 3, call: { rank, number: Number(first), name: second, share: round2(numberFrom(third)) } };
+  }
+  return null;
+}
+
+function firstNumberInRangeOrNull(cells, start, end, predicate) {
+  for (let c = Math.max(0, start); c <= Math.min(cells.length - 1, end); c += 1) {
+    const value = numberFrom(cells[c]);
+    if (value && predicate(value)) return value;
+  }
+  return null;
 }
 
 function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
