@@ -940,20 +940,27 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
   let currentThread = null;
   let currentSo = null;
   for (const row of safe.slice(start)) {
-    const text = rowText(row);
     if (isHotspotDimensionRow(row, "cycle")) dimension = "cycle";
     if (isHotspotDimensionRow(row, "fe")) dimension = "fe";
     if (isHotspotDimensionRow(row, "be")) dimension = "be";
-    const threadCell = row.find((cell) => /\([^)]*%\)/u.test(clean(cell)) && !isLibraryCell(cell) && !isFunctionCell(cell));
+    const indexed = normalizeRow(row).map((cell, column) => ({ cell, column, text: clean(cell) })).filter((item) => item.text);
+    const threadCell = indexed.find((item) => item.column <= 2 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
+      || indexed.find((item) => item.column <= 2 && looksLikeThreadName(item.text));
     if (threadCell) {
-      const match = clean(threadCell).match(/^(.+?)\s*\(\s*([\d.]+)\s*%\s*\)$/u);
-      if (match) currentThread = ensureThread(parsed.threads, scenarioId, match[1], "", numberFrom(match[2]));
+      const parsedThread = parseNamedPercent(threadCell.text);
+      currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", parsedThread.value);
     }
-    const libraryCell = row.find(isLibraryCell);
-    if (libraryCell) currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell, "library"));
-    const functionCells = row.filter(isFunctionCell);
+    const libraryCells = indexed.filter((item) => isLibraryCell(item.text));
+    const firstLibraryColumn = libraryCells[0]?.column ?? -1;
+    for (const libraryCell of libraryCells) {
+      currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell.text, "library"));
+    }
+    const functionCells = indexed.filter((item) =>
+      isFunctionCell(item.text)
+      || (currentSo && item.column > firstLibraryColumn && !isLibraryCell(item.text) && !looksLikeThreadName(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
+    );
     for (const functionCell of functionCells) {
-      const fn = parseNamedPercent(stripHotspotPrefix(functionCell, "function"));
+      const fn = parseNamedPercent(stripHotspotPrefix(functionCell.text, "function"));
       if (currentThread && currentSo && fn.name) {
         parsed.hotspots.push({
           dimension,
@@ -980,7 +987,10 @@ function isHotspotDimensionRow(row, dimension) {
 }
 
 function isLibraryCell(value) {
-  return /^(Library|SO|库|模块)\s*[:：]/iu.test(clean(value)) || /^(Library|SO)\b/iu.test(clean(value));
+  const text = clean(value);
+  return /^(Library|SO|库|模块)\s*[:：]/iu.test(text)
+    || /^(Library|SO)\b/iu.test(text)
+    || /(\.so(?:\b|[.\s+])|\[kernel\.kallsyms\]|kallsyms|\/system\/|\/vendor\/|\/proc\/)/iu.test(text);
 }
 
 function isFunctionCell(value) {
@@ -992,6 +1002,12 @@ function stripHotspotPrefix(value, kind) {
   return kind === "library"
     ? text.replace(/^(Library|SO|库|模块)\s*[:：]?\s*/iu, "")
     : text.replace(/^(Function|函数|方法)\s*[:：]?\s*/iu, "");
+}
+
+function looksLikeThreadName(value) {
+  const text = clean(value);
+  if (!text || isLibraryCell(text) || isFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) return false;
+  return /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(text);
 }
 
 function firstSectionAfter(sections, start, names) {
