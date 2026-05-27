@@ -880,8 +880,8 @@ function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
       const targetThread = header?.thread || currentThread;
       const scope = pair.scope || scopeForColumn(columnScopes, pair.column) || header?.scope || currentThread?.currentScope || "total";
       const metric = canonicalTopdownName(pair.name);
-      const level = topdownLevel1.includes(metric) ? 1 : 2;
-      parsed.topdown.push({ threadId: targetThread.id, scope, level, metric, parent: topdownParent(metric), value: pair.value });
+      const parent = topdownParent(metric);
+      parsed.topdown.push({ threadId: targetThread.id, scope, level: topdownLevel(metric, parent), metric, parent, value: pair.value });
     }
   }
   if (unresolved.size) {
@@ -1085,6 +1085,12 @@ function topdownParent(metric) {
   if (/TLB|PRFM|HWPRF|PAGE_FAULT/u.test(metric)) return "TLB REFILL & PREFETCH PKI";
   if (/CACHE_REFILL/u.test(metric)) return "CACHE REFILL PKI";
   return "";
+}
+
+function topdownLevel(metric, parent = topdownParent(metric)) {
+  if (topdownLevel1.includes(metric)) return 1;
+  if (!parent || topdownLevel1.includes(parent) || ["LINX MEMSTALL PKI", "CACHE REFILL PKI", "TLB REFILL & PREFETCH PKI"].includes(parent)) return 2;
+  return 3;
 }
 
 function isKnownTopdown(value) {
