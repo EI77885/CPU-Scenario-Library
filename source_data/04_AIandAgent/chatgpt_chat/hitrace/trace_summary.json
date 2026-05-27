@@ -1,0 +1,210 @@
+{
+  "scenarioId": "scenario-011",
+  "clusterOverview": [
+    {
+      "cluster": "小核",
+      "running": 52.5,
+      "idle": 47.5
+    },
+    {
+      "cluster": "中核",
+      "running": 65.4,
+      "idle": 34.6
+    },
+    {
+      "cluster": "大核",
+      "running": 80.2,
+      "idle": 19.8
+    }
+  ],
+  "processOverview": [
+    {
+      "cluster": "小核",
+      "items": [
+        {
+          "name": "system_server",
+          "value": 15.4
+        },
+        {
+          "name": "system_ui",
+          "value": 10
+        },
+        {
+          "name": "media_server",
+          "value": 9.9
+        },
+        {
+          "name": "render_service",
+          "value": 9.8
+        },
+        {
+          "name": "other process",
+          "value": 7.4
+        },
+        {
+          "name": "idle",
+          "value": 47.5
+        }
+      ]
+    },
+    {
+      "cluster": "中核",
+      "items": [
+        {
+          "name": "render_service",
+          "value": 18.9
+        },
+        {
+          "name": "system_ui",
+          "value": 15.6
+        },
+        {
+          "name": "system_server",
+          "value": 12.2
+        },
+        {
+          "name": "binder",
+          "value": 6.8
+        },
+        {
+          "name": "other process",
+          "value": 11.9
+        },
+        {
+          "name": "idle",
+          "value": 34.6
+        }
+      ]
+    },
+    {
+      "cluster": "大核",
+      "items": [
+        {
+          "name": "render_service",
+          "value": 22
+        },
+        {
+          "name": "chatgpt",
+          "value": 18.5
+        },
+        {
+          "name": "binder",
+          "value": 17.9
+        },
+        {
+          "name": "system_ui",
+          "value": 12.8
+        },
+        {
+          "name": "other process",
+          "value": 9
+        },
+        {
+          "name": "idle",
+          "value": 19.8
+        }
+      ]
+    }
+  ],
+  "threadOverview": [
+    {
+      "cluster": "小核",
+      "items": [
+        {
+          "name": "worker_thread",
+          "value": 13.2
+        },
+        {
+          "name": "gpu_worker",
+          "value": 8.6
+        },
+        {
+          "name": "jit_thread",
+          "value": 8.5
+        },
+        {
+          "name": "render_thread",
+          "value": 8.4
+        },
+        {
+          "name": "other process",
+          "value": 7.4
+        },
+        {
+          "name": "other thread",
+          "value": 6.4
+        },
+        {
+          "name": "idle",
+          "value": 47.5
+        }
+      ]
+    },
+    {
+      "cluster": "中核",
+      "items": [
+        {
+          "name": "render_thread",
+          "value": 14.9
+        },
+        {
+          "name": "gpu_worker",
+          "value": 12.9
+        },
+        {
+          "name": "worker_thread",
+          "value": 11.5
+        },
+        {
+          "name": "jit_thread",
+          "value": 4.2
+        },
+        {
+          "name": "other process",
+          "value": 11.9
+        },
+        {
+          "name": "other thread",
+          "value": 10
+        },
+        {
+          "name": "idle",
+          "value": 34.6
+        }
+      ]
+    },
+    {
+      "cluster": "大核",
+      "items": [
+        {
+          "name": "render_thread",
+          "value": 20.6
+        },
+        {
+          "name": "gpu_worker",
+          "value": 14.2
+        },
+        {
+          "name": "io_thread",
+          "value": 12.8
+        },
+        {
+          "name": "main_thread",
+          "value": 12.3
+        },
+        {
+          "name": "other thread",
+          "value": 11.3
+        },
+        {
+          "name": "other process",
+          "value": 9
+        },
+        {
+          "name": "idle",
+          "value": 19.8
+        }
+      ]
+    }
+  ]
+}

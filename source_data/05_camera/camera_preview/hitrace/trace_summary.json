@@ -1,0 +1,210 @@
+{
+  "scenarioId": "scenario-012",
+  "clusterOverview": [
+    {
+      "cluster": "小核",
+      "running": 56.9,
+      "idle": 43.1
+    },
+    {
+      "cluster": "中核",
+      "running": 71.7,
+      "idle": 28.3
+    },
+    {
+      "cluster": "大核",
+      "running": 85,
+      "idle": 15
+    }
+  ],
+  "processOverview": [
+    {
+      "cluster": "小核",
+      "items": [
+        {
+          "name": "render_service",
+          "value": 16.5
+        },
+        {
+          "name": "system_ui",
+          "value": 13.6
+        },
+        {
+          "name": "system_server",
+          "value": 10.6
+        },
+        {
+          "name": "binder",
+          "value": 5.9
+        },
+        {
+          "name": "other process",
+          "value": 10.3
+        },
+        {
+          "name": "idle",
+          "value": 43.1
+        }
+      ]
+    },
+    {
+      "cluster": "中核",
+      "items": [
+        {
+          "name": "render_service",
+          "value": 19.7
+        },
+        {
+          "name": "camera",
+          "value": 16.5
+        },
+        {
+          "name": "binder",
+          "value": 16
+        },
+        {
+          "name": "system_ui",
+          "value": 11.4
+        },
+        {
+          "name": "other process",
+          "value": 8.1
+        },
+        {
+          "name": "idle",
+          "value": 28.3
+        }
+      ]
+    },
+    {
+      "cluster": "大核",
+      "items": [
+        {
+          "name": "camera",
+          "value": 27.5
+        },
+        {
+          "name": "binder",
+          "value": 21.2
+        },
+        {
+          "name": "surfaceflinger",
+          "value": 14.1
+        },
+        {
+          "name": "render_service",
+          "value": 13.9
+        },
+        {
+          "name": "other process",
+          "value": 8.3
+        },
+        {
+          "name": "idle",
+          "value": 15
+        }
+      ]
+    }
+  ],
+  "threadOverview": [
+    {
+      "cluster": "小核",
+      "items": [
+        {
+          "name": "render_thread",
+          "value": 13.5
+        },
+        {
+          "name": "gpu_worker",
+          "value": 11.1
+        },
+        {
+          "name": "worker_thread",
+          "value": 8.7
+        },
+        {
+          "name": "io_thread",
+          "value": 4.9
+        },
+        {
+          "name": "other process",
+          "value": 10.3
+        },
+        {
+          "name": "other thread",
+          "value": 8.4
+        },
+        {
+          "name": "idle",
+          "value": 43.1
+        }
+      ]
+    },
+    {
+      "cluster": "中核",
+      "items": [
+        {
+          "name": "render_thread",
+          "value": 18
+        },
+        {
+          "name": "io_thread",
+          "value": 12.8
+        },
+        {
+          "name": "main_thread",
+          "value": 12.8
+        },
+        {
+          "name": "gpu_worker",
+          "value": 11.5
+        },
+        {
+          "name": "other thread",
+          "value": 8.5
+        },
+        {
+          "name": "other process",
+          "value": 8.1
+        },
+        {
+          "name": "idle",
+          "value": 28.3
+        }
+      ]
+    },
+    {
+      "cluster": "大核",
+      "items": [
+        {
+          "name": "main_thread",
+          "value": 22.5
+        },
+        {
+          "name": "io_thread",
+          "value": 19.2
+        },
+        {
+          "name": "render_thread",
+          "value": 16.3
+        },
+        {
+          "name": "binder_thread",
+          "value": 8
+        },
+        {
+          "name": "other thread",
+          "value": 10.7
+        },
+        {
+          "name": "other process",
+          "value": 8.3
+        },
+        {
+          "name": "idle",
+          "value": 15
+        }
+      ]
+    }
+  ]
+}

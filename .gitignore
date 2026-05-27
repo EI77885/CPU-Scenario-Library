@@ -1,0 +1,27 @@
+.DS_Store
+Thumbs.db
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+data/*.sqlite
+data/*.sqlite-*
+
+source_data/.DS_Store
+source_data/**/.DS_Store
+
+# Raw traces can be very large. Keep generated trace_summary.json instead.
+source_data/**/hitrace/*.perfetto-trace
+source_data/**/hitrace/*.pftrace
+source_data/**/hitrace/*.ctrace
+source_data/**/hitrace/*.pb
+source_data/**/hitrace/*.bin
+source_data/**/hitrace/*.trace
+source_data/**/hitrace/*.htrace
+source_data/**/hitrace/*.ohtrace
+source_data/**/hitrace/*.systrace
+source_data/**/hitrace/*.ftrace
+source_data/**/hitrace/*.gz
+
