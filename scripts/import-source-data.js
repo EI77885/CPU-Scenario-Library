@@ -393,13 +393,14 @@ function percentFrom(value) {
 }
 
 function syscallFromText(value, rank) {
-  const match = clean(value).match(/^(\d+)\s*[_-]\s*([^(]+?)\s*\(\s*([\d.]+)\s*%\s*\)$/u);
+  const text = clean(value);
+  const match = text.match(/^(?:(\d+(?:\.\d+)?)\s*[_\-\s:：]*)?([A-Za-z_][\w./-]*?)\s*(?:\(\s*([\d.]+)\s*%\s*\)|[\s,，:：]+([\d.]+)\s*%)$/u);
   if (!match) return null;
   return {
     rank,
-    number: Number(match[1]),
+    number: match[1] ? Number(match[1]) : rank,
     name: match[2],
-    share: round2(Number(match[3])),
+    share: round2(Number(match[3] || match[4])),
   };
 }
 
@@ -760,7 +761,7 @@ function locateSections(rows) {
     if (text.includes("TOPDOWN") && markers.topdown == null) markers.topdown = index;
     if (text.includes("指令分布") && markers.instructions == null) markers.instructions = index;
     if (text.includes("系统调用") && markers.syscalls == null) markers.syscalls = index;
-    if ((text.includes("热点SO") || text.includes("HOT") || text.includes("BOUND SO") || text.includes("LIBRARY:")) && markers.hotspots == null) markers.hotspots = index;
+    if ((text.includes("热点") || text.includes("瓶颈") || text.includes("HOT") || text.includes("BOUND SO") || text.includes("LIBRARY") || text.includes("FUNCTION")) && markers.hotspots == null) markers.hotspots = index;
     if ((text.includes("负载信息") || text.includes("CLUSTER LOAD OVERVIEW")) && markers.load == null) markers.load = index;
   });
   return markers;
@@ -917,38 +918,42 @@ function parseOneSheetSyscalls(rows, sections, parsed, scenarioId) {
   const start = sections.syscalls ?? safe.findIndex((row) => row.some((cell) => includesText(cell, "系统调用密度")));
   if (start < 0) return;
   const end = firstSectionAfter(sections, start, ["hotspots"]) ?? safe.length;
+  const header = safe.slice(start, Math.min(end, start + 3)).find((row) => row.some((cell) => /线程|thread/iu.test(clean(cell))) && row.some((cell) => /密度|density/iu.test(clean(cell)))) || [];
+  const threadCol = header.findIndex((cell) => /线程|thread/iu.test(clean(cell)));
+  const densityCol = header.findIndex((cell) => /密度|density/iu.test(clean(cell)));
   for (const row of safe.slice(start, end)) {
     const cells = normalizeRow(row).map(clean);
     const callCells = cells.filter((cell) => syscallFromText(cell, 1));
     if (!callCells.length) continue;
-    const name = cells.find((cell) => cell && !cell.includes("系统调用") && !cell.includes("TOP") && !syscallFromText(cell, 1)) || `thread_${parsed.threads.size + 1}`;
+    const name = clean(row[threadCol]) || cells.find((cell) => cell && /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity/iu.test(cell) && !cell.includes("系统调用") && !cell.includes("TOP") && !syscallFromText(cell, 1)) || `thread_${parsed.threads.size + 1}`;
     const thread = ensureThread(parsed.threads, scenarioId, name, "");
-    const density = row.find((cell) => typeof cell === "number" && cell > 0) || 0;
-    parsed.syscalls.push({ threadId: thread.id, density: Number(density), calls: parseSyscallCalls(callCells) });
+    const density = densityCol >= 0 ? numberFrom(row[densityCol]) : row.find((cell) => typeof cell === "number" && cell > 0) || 0;
+    parsed.syscalls.push({ threadId: thread.id, density: numberFrom(density), calls: parseSyscallCalls(callCells) });
   }
 }
 
 function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
   const safe = safeRows(rows);
-  const start = sections.hotspots ?? safe.findIndex((row) => row.some((cell) => includesText(cell, "Library:")));
+  const start = sections.hotspots ?? safe.findIndex((row) => row.some((cell) => isLibraryCell(cell) || isFunctionCell(cell)));
   if (start < 0) return;
   let dimension = "cycle";
   let currentThread = null;
   let currentSo = null;
   for (const row of safe.slice(start)) {
     const text = rowText(row);
-    if (/^\s*FE\s*$/iu.test(text) || /\bFE\b/iu.test(text)) dimension = "fe";
-    if (/^\s*BE\s*$/iu.test(text) || /\bBE\b/iu.test(text)) dimension = "be";
-    const threadCell = row.find((cell) => /\([^)]*%\)/u.test(clean(cell)) && !includesText(cell, "Library") && !includesText(cell, "Function"));
+    if (isHotspotDimensionRow(row, "cycle")) dimension = "cycle";
+    if (isHotspotDimensionRow(row, "fe")) dimension = "fe";
+    if (isHotspotDimensionRow(row, "be")) dimension = "be";
+    const threadCell = row.find((cell) => /\([^)]*%\)/u.test(clean(cell)) && !isLibraryCell(cell) && !isFunctionCell(cell));
     if (threadCell) {
       const match = clean(threadCell).match(/^(.+?)\s*\(\s*([\d.]+)\s*%\s*\)$/u);
       if (match) currentThread = ensureThread(parsed.threads, scenarioId, match[1], "", numberFrom(match[2]));
     }
-    const libraryCell = row.find((cell) => includesText(cell, "Library"));
-    if (libraryCell) currentSo = parseNamedPercent(clean(libraryCell).replace(/^Library:\s*/iu, ""));
-    const functionCells = row.filter((cell) => includesText(cell, "Function"));
+    const libraryCell = row.find(isLibraryCell);
+    if (libraryCell) currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell, "library"));
+    const functionCells = row.filter(isFunctionCell);
     for (const functionCell of functionCells) {
-      const fn = parseNamedPercent(clean(functionCell).replace(/^Function:\s*/iu, ""));
+      const fn = parseNamedPercent(stripHotspotPrefix(functionCell, "function"));
       if (currentThread && currentSo && fn.name) {
         parsed.hotspots.push({
           dimension,
@@ -962,6 +967,31 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
       }
     }
   }
+}
+
+function isHotspotDimensionRow(row, dimension) {
+  const cells = [...new Set(normalizeRow(row).map(clean).filter(Boolean))];
+  if (!cells.length || cells.some((cell) => isLibraryCell(cell) || isFunctionCell(cell))) return false;
+  const text = cells.join(" ").trim();
+  if (dimension === "cycle") return /^(CYCLE|热点|CPU热点|Cycle热点)$/iu.test(text);
+  if (dimension === "fe") return /^(FE|FE\s*BOUND|FE瓶颈|前端瓶颈)$/iu.test(text);
+  if (dimension === "be") return /^(BE|BE\s*BOUND|BE瓶颈|后端瓶颈)$/iu.test(text);
+  return false;
+}
+
+function isLibraryCell(value) {
+  return /^(Library|SO|库|模块)\s*[:：]/iu.test(clean(value)) || /^(Library|SO)\b/iu.test(clean(value));
+}
+
+function isFunctionCell(value) {
+  return /^(Function|函数|方法)\s*[:：]/iu.test(clean(value)) || /^Function\b/iu.test(clean(value));
+}
+
+function stripHotspotPrefix(value, kind) {
+  const text = clean(value);
+  return kind === "library"
+    ? text.replace(/^(Library|SO|库|模块)\s*[:：]?\s*/iu, "")
+    : text.replace(/^(Function|函数|方法)\s*[:：]?\s*/iu, "");
 }
 
 function firstSectionAfter(sections, start, names) {
