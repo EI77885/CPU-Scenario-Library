@@ -1133,14 +1133,14 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
       const parsedThread = parseNamedPercent(threadCell.text);
       currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", parsedThread.value);
     }
-    const libraryCells = indexed.filter((item) => isLibraryCell(item.text));
+    const libraryCells = indexed.filter((item) => isLibraryCell(item.text) || looksLikeHotspotSoCell(item));
     const firstLibraryColumn = libraryCells[0]?.column ?? -1;
     for (const libraryCell of libraryCells) {
       currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell.text, "library"));
     }
     const functionCells = indexed.filter((item) =>
       isFunctionCell(item.text)
-      || (currentSo && item.column > firstLibraryColumn && !isLibraryCell(item.text) && !looksLikeThreadName(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
+      || looksLikeHotspotFunctionCell(item, firstLibraryColumn)
     );
     for (const functionCell of functionCells) {
       const fn = parseNamedPercent(stripHotspotPrefix(functionCell.text, "function"));
@@ -1178,6 +1178,23 @@ function isLibraryCell(value) {
 
 function isFunctionCell(value) {
   return /^(Function|函数|方法)\s*[:：]/iu.test(clean(value)) || /^Function\b/iu.test(clean(value));
+}
+
+function looksLikeHotspotSoCell(item) {
+  if (!item || item.column < 3 || item.column > 5) return false;
+  const parsed = parseNamedPercent(item.text);
+  if (!parsed.name || !parsed.value) return false;
+  if (looksLikeThreadName(item.text) || isFunctionCell(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
+  return true;
+}
+
+function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
+  if (!item || item.column < 6) return false;
+  if (firstLibraryColumn >= 0 && item.column <= firstLibraryColumn) return false;
+  const parsed = parseNamedPercent(item.text);
+  if (!parsed.name || !parsed.value) return false;
+  if (isLibraryCell(item.text) || looksLikeThreadName(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
+  return true;
 }
 
 function stripHotspotPrefix(value, kind) {
