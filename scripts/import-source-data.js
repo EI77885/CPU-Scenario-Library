@@ -782,9 +782,11 @@ function parseOneSheetHizee(rows, sections, parsed) {
   const ddrCol = header.findIndex((cell) => /DDR/iu.test(clean(cell)));
   const bandwidthCol = header.findIndex((cell) => /平均带宽|bandwidth/iu.test(clean(cell)));
   const latencyCol = header.findIndex((cell) => /latency|时延/iu.test(clean(cell)));
+  const loadEndCol = firstPositiveIndex([fpsCol, freqCol, ddrCol, bandwidthCol, latencyCol]) - 1;
   const searchRows = safe.slice(headerIndex >= 0 ? headerIndex + 1 : sections.load ?? 0, sections.topdown ?? safe.length);
   let currentCluster = "";
   const clusterSeen = new Map();
+  const clusterLoadRows = new Map();
   for (const row of searchRows) {
     const text = rowText(row);
     const cluster = clusterFromRow(row) || currentCluster;
@@ -792,9 +794,20 @@ function parseOneSheetHizee(rows, sections, parsed) {
     if (!cluster) continue;
     if (!clusterSeen.has(cluster)) clusterSeen.set(cluster, { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
     const item = clusterSeen.get(cluster);
-    if (/所有\s*进程|全部\s*进程|all\s*process/iu.test(text)) item.allProcess = processLoadFromRow(row, loadCol, /所有\s*进程|全部\s*进程|all\s*process/iu) || item.allProcess;
-    if (/UI\s*(进程|线程|process|thread)?/iu.test(text)) item.uiProcess = processLoadFromRow(row, loadCol, /UI\s*(进程|线程|process|thread)?/iu) || item.uiProcess;
-    if (/render[\s_-]*(service|进程|线程|process|thread)|renderservice/iu.test(text)) item.renderService = processLoadFromRow(row, loadCol, /render[\s_-]*(service|进程|线程|process|thread)|renderservice/iu) || item.renderService;
+    const loadSlot = hizeeLoadSlotFromRow(text);
+    const orderedLoadValue = hizeeLoadValueFromRow(row, loadCol, loadEndCol);
+    if (loadSlot === "all") item.allProcess = processLoadFromRow(row, loadCol, loadEndCol, hizeeAllProcessPattern()) || item.allProcess;
+    if (loadSlot === "ui") item.uiProcess = processLoadFromRow(row, loadCol, loadEndCol, hizeeUiProcessPattern()) || item.uiProcess;
+    if (loadSlot === "render") item.renderService = processLoadFromRow(row, loadCol, loadEndCol, hizeeRenderProcessPattern()) || item.renderService;
+    if (loadSlot) {
+      clusterLoadRows.set(cluster, Math.max(clusterLoadRows.get(cluster) || 0, hizeeLoadSlotIndex(loadSlot) + 1));
+    } else if (orderedLoadValue) {
+      const rowIndex = clusterLoadRows.get(cluster) || 0;
+      if (rowIndex === 0) item.allProcess = item.allProcess || orderedLoadValue;
+      if (rowIndex === 1) item.uiProcess = item.uiProcess || orderedLoadValue;
+      if (rowIndex === 2) item.renderService = item.renderService || orderedLoadValue;
+      clusterLoadRows.set(cluster, rowIndex + 1);
+    }
     if (!item.avgFreqMhz) item.avgFreqMhz = numberNear(row, freqCol, (num) => num > 300 && num < 10000);
     if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = numberNear(row, fpsCol, (num) => num > 100 && num < 300) || numberNear(row, fpsCol, (num) => num > 0 && num <= 300);
     if (!parsed.hizee.scene.ddrFreqMhz) parsed.hizee.scene.ddrFreqMhz = numberNear(row, ddrCol, (num) => num > 300 && num < 10000);
@@ -810,6 +823,34 @@ function clusterFromRow(row) {
   if (/中核|cluster1/iu.test(text)) return "中核";
   if (/大核|cluster2/iu.test(text)) return "大核";
   return "";
+}
+
+function firstPositiveIndex(indexes) {
+  const valid = indexes.filter((index) => index > 0);
+  return valid.length ? Math.min(...valid) : Number.POSITIVE_INFINITY;
+}
+
+function hizeeAllProcessPattern() {
+  return /所有\s*进程|全部\s*进程|总进程|all\s*(process|proc)?|total\s*(process|proc)?/iu;
+}
+
+function hizeeUiProcessPattern() {
+  return /\bUI\b\s*(进程|线程|process|thread)?|UI进程|UI线程|前台\s*(进程|线程)|主\s*(进程|线程)/iu;
+}
+
+function hizeeRenderProcessPattern() {
+  return /render[\s_-]*(service|server|进程|线程|process|thread)?|render\s*service|render_service|renderservice|RS\s*(进程|线程|process|thread)?|渲染\s*(服务|进程|线程)/iu;
+}
+
+function hizeeLoadSlotFromRow(text) {
+  if (hizeeAllProcessPattern().test(text)) return "all";
+  if (hizeeUiProcessPattern().test(text)) return "ui";
+  if (hizeeRenderProcessPattern().test(text)) return "render";
+  return "";
+}
+
+function hizeeLoadSlotIndex(slot) {
+  return { all: 0, ui: 1, render: 2 }[slot] ?? 0;
 }
 
 function firstPercentNear(row, label) {
@@ -829,16 +870,40 @@ function valueAtOrNear(row, index, label) {
   return firstPercentNear(row, label);
 }
 
-function processLoadFromRow(row, loadCol, labelPattern) {
+function processLoadFromRow(row, loadCol, loadEndCol, labelPattern) {
   const cells = normalizeRow(row);
+  const effectiveLoadEndCol = Number.isFinite(loadEndCol) ? Math.min(loadEndCol, cells.length - 1) : cells.length - 1;
+  const labelIndex = cells.findIndex((cell) => labelPattern.test(clean(cell)));
+  if (labelIndex >= 0) {
+    const inline = numberFrom(cells[labelIndex]);
+    if (inline > 0 && inline <= 100) return inline;
+    const afterLabel = firstLikelyPercentInRange(cells, labelIndex + 1, Math.min(effectiveLoadEndCol, labelIndex + 10));
+    if (afterLabel) return afterLabel;
+    const beforeLabel = firstLikelyPercentInRange(cells, Math.max(0, labelIndex - 3), labelIndex - 1);
+    if (beforeLabel) return beforeLabel;
+  }
   if (loadCol >= 0) {
     const direct = numberFrom(cells[loadCol]);
     if (direct > 0 && direct <= 100) return direct;
-    const nearby = firstNumberInRange(cells, loadCol, loadCol + 4, (num) => num > 0 && num <= 100);
+    const nearby = firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 8));
     if (nearby) return nearby;
   }
-  const labelIndex = cells.findIndex((cell) => labelPattern.test(clean(cell)));
-  if (labelIndex >= 0) return firstNumberInRange(cells, labelIndex, labelIndex + 6, (num) => num > 0 && num <= 100);
+  return 0;
+}
+
+function hizeeLoadValueFromRow(row, loadCol, loadEndCol) {
+  const cells = normalizeRow(row);
+  const effectiveLoadEndCol = Number.isFinite(loadEndCol) ? Math.min(loadEndCol, cells.length - 1) : cells.length - 1;
+  if (loadCol >= 0) return firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 8));
+  return firstLikelyPercentInRange(cells, 0, effectiveLoadEndCol);
+}
+
+function firstLikelyPercentInRange(cells, start, end) {
+  for (let c = Math.max(0, start); c <= Math.min(cells.length - 1, end); c += 1) {
+    const text = clean(cells[c]);
+    const value = numberFrom(cells[c]);
+    if (value > 0 && value <= 100 && (/%/u.test(text) || value < 100)) return value;
+  }
   return 0;
 }
 
