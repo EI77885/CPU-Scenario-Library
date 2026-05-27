@@ -7,6 +7,7 @@ import {
   clusters,
   filterFields,
   instructionEvents,
+  syscallPool,
   topdownLevel1,
   topdownNodes,
 } from "./scripts/data-common.js";
@@ -84,20 +85,15 @@ function scenarioFull(db, scenarioId) {
     threadType: row.thread_type,
     loadShare: round2(row.load_share),
   }));
+  const displayThreads = threads.length ? threads : defaultDisplayThreads(scenarioId, scenario.base.name);
   const hizeeScene = db.prepare("SELECT * FROM hizee_scene WHERE scenario_id = ?").get(scenarioId) || {};
   const hizeeClusters = all(db, "SELECT * FROM hizee_clusters WHERE scenario_id = ? ORDER BY rowid", [scenarioId]);
   return {
     ...scenario,
     loadInfo: {
-      clusterRunning: all(db, "SELECT * FROM load_cluster WHERE scenario_id = ? ORDER BY rowid", [scenarioId]).map((row) => ({ name: row.cluster, value: round2(row.running) })),
-      processRunning: clusters.map((cluster) => ({
-        cluster,
-        items: all(db, "SELECT name, value FROM load_process WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]).map(roundValueRow),
-      })),
-      threadRunning: clusters.map((cluster) => ({
-        cluster,
-        items: all(db, "SELECT name, value FROM load_thread WHERE scenario_id = ? AND cluster = ? ORDER BY rank", [scenarioId, cluster]).map(roundValueRow),
-      })),
+      clusterRunning: buildClusterRunning(db, scenarioId),
+      processRunning: buildLoadStacks(db, scenarioId, "load_process", "未识别进程"),
+      threadRunning: buildLoadStacks(db, scenarioId, "load_thread", "未识别线程"),
       hizeeRows: ["所有进程", "UI进程", "render service"].map((scope, index) => ({
         scope,
         littleRunning: runningForScope(hizeeClusters[0], index),
@@ -112,20 +108,46 @@ function scenarioFull(db, scenarioId) {
         latency: valueOrNA(hizeeScene, "latency"),
       })),
     },
-    topdownInfo: threads.map((thread) => buildTopdown(db, thread)),
-    instructionMix: threads.map((thread) => buildInstruction(db, thread)),
-    syscallInfo: threads.map((thread) => buildSyscall(db, thread)),
+    topdownInfo: displayThreads.map((thread) => buildTopdown(db, thread)),
+    instructionMix: displayThreads.map((thread) => buildInstruction(db, thread)),
+    syscallInfo: displayThreads.map((thread) => buildSyscall(db, thread)),
     hotspotInfo: {
-      cycle: buildHotspots(db, scenarioId, "cycle", threads),
-      fe: buildHotspots(db, scenarioId, "fe", threads),
-      be: buildHotspots(db, scenarioId, "be", threads),
+      cycle: buildHotspots(db, scenarioId, "cycle", displayThreads),
+      fe: buildHotspots(db, scenarioId, "fe", displayThreads),
+      be: buildHotspots(db, scenarioId, "be", displayThreads),
     },
   };
+}
+
+function defaultDisplayThreads(scenarioId, scenarioName) {
+  return [
+    { id: `${scenarioId}-missing-main`, name: `${scenarioName}_未识别主线程`, threadType: "main", loadShare: NA },
+    { id: `${scenarioId}-missing-render`, name: `${scenarioName}_未识别渲染线程`, threadType: "render", loadShare: NA },
+    { id: `${scenarioId}-missing-other`, name: `${scenarioName}_未识别其他线程`, threadType: "other", loadShare: NA },
+  ];
 }
 
 function runningForScope(row, index) {
   if (!row) return NA;
   return valueAtOrNA([row.all_process_running, row.ui_process_running, row.render_service_running][index]);
+}
+
+function buildClusterRunning(db, scenarioId) {
+  const rows = all(db, "SELECT * FROM load_cluster WHERE scenario_id = ? ORDER BY rowid", [scenarioId]);
+  return clusters.map((cluster, index) => {
+    const row = rows.find((item) => item.cluster === cluster) || rows[index];
+    return { name: cluster, value: row ? valueAtOrNA(row.running) : NA };
+  });
+}
+
+function buildLoadStacks(db, scenarioId, table, missingLabel) {
+  return clusters.map((cluster) => {
+    const items = all(db, `SELECT name, value FROM ${table} WHERE scenario_id = ? AND cluster = ? ORDER BY rank`, [scenarioId, cluster]).map(roundValueRow);
+    return {
+      cluster,
+      items: items.length ? items : [{ name: `${missingLabel}（${cluster}）`, value: NA }],
+    };
+  });
 }
 
 function round2(value) {
@@ -155,6 +177,10 @@ function roundValueRow(row) {
   return row ? { ...row, value: valueAtOrNA(row.value) } : { value: NA };
 }
 
+function threadLoadShare(thread) {
+  return valueAtOrNA(thread?.loadShare);
+}
+
 function buildTopdown(db, thread) {
   const rows = all(db, "SELECT * FROM topdown_metrics WHERE thread_id = ?", [thread.id]);
   const valueFor = (scope, metric, level = null) => {
@@ -165,7 +191,7 @@ function buildTopdown(db, thread) {
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: round2(thread.loadShare),
+    loadShare: threadLoadShare(thread),
     total: { level1: level1("total"), hierarchy: buildHierarchy(rows, valueFor) },
     kernel: { level1: level1("kernel") },
   };
@@ -195,7 +221,7 @@ function buildInstruction(db, thread) {
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: round2(thread.loadShare),
+    loadShare: threadLoadShare(thread),
     total: instructionEvents.map((event) => ({ name: event, value: valueFor("total", event) })),
     kernel: instructionEvents.map((event) => ({ name: event, value: valueFor("kernel", event) })),
   };
@@ -203,12 +229,13 @@ function buildInstruction(db, thread) {
 
 function buildSyscall(db, thread) {
   const metric = db.prepare("SELECT density FROM syscall_metrics WHERE thread_id = ?").get(thread.id);
+  const calls = all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]).map(roundValueRow);
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: round2(thread.loadShare),
+    loadShare: threadLoadShare(thread),
     density: metric ? valueAtOrNA(metric.density) : NA,
-    calls: all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]).map(roundValueRow),
+    calls: calls.length ? calls : [{ name: `未识别系统调用（${thread.name || "未知线程"}）`, value: NA }],
   };
 }
 
@@ -227,7 +254,7 @@ function buildHotspots(db, scenarioId, dimension, threads) {
     return {
       name: thread.name,
       threadType: thread.threadType,
-      loadShare: round2(thread.loadShare),
+      loadShare: threadLoadShare(thread),
       score: valueAtOrNA(row.score),
       sos: sos.length ? sos : [missingHotspotSo(dimension, thread)],
     };
@@ -244,7 +271,7 @@ function missingHotspotThread(dimension, thread) {
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: round2(thread.loadShare),
+    loadShare: threadLoadShare(thread),
     score: NA,
     sos: [missingHotspotSo(dimension, thread)],
   };
@@ -275,7 +302,7 @@ function hotspotDimensionLabel(dimension) {
 function buildFeatures(db) {
   const processNames = topNames(db, "load_process", "name", "name NOT IN ('idle', 'other process')", 5);
   const threadNames = topNames(db, "load_thread", "name", "name NOT IN ('idle', 'other thread', 'other process')", 5);
-  const syscallNames = topNames(db, "syscall_top", "name", "name != 'others'", 15);
+  const syscallNames = [...new Set([...topNames(db, "syscall_top", "name", "name != 'others'", 15), ...syscallPool])];
   const hotspotFeatures = ["cycle", "fe", "be"].flatMap((dimension) => {
     const label = { cycle: "Cycle 热点", fe: "FE BOUND", be: "BE BOUND" }[dimension];
     return [
