@@ -792,15 +792,14 @@ function parseOneSheetHizee(rows, sections, parsed) {
     if (!cluster) continue;
     if (!clusterSeen.has(cluster)) clusterSeen.set(cluster, { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
     const item = clusterSeen.get(cluster);
-    if (/所有进程|all\s*process/iu.test(text)) item.allProcess = valueAtOrNear(row, loadCol, "所有进程") || item.allProcess;
-    if (/(^|\s|[^\w])UI\s*进程|UI\s*process/iu.test(text)) item.uiProcess = valueAtOrNear(row, loadCol, "UI进程") || item.uiProcess;
-    if (/render[\s_-]*service|renderservice/iu.test(text)) item.renderService = valueAtOrNear(row, loadCol, "render service") || item.renderService;
-    const nums = row.filter((cell) => typeof cell === "number");
-    if (!item.avgFreqMhz) item.avgFreqMhz = freqCol >= 0 ? numberFrom(row[freqCol]) : nums.find((num) => num > 300 && num < 5000) || 0;
-    if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = fpsCol >= 0 ? numberFrom(row[fpsCol]) : 0;
-    if (!parsed.hizee.scene.ddrFreqMhz) parsed.hizee.scene.ddrFreqMhz = ddrCol >= 0 ? numberFrom(row[ddrCol]) : 0;
-    if (!parsed.hizee.scene.bandwidth) parsed.hizee.scene.bandwidth = bandwidthCol >= 0 ? numberFrom(row[bandwidthCol]) : 0;
-    if (!parsed.hizee.scene.latency) parsed.hizee.scene.latency = latencyCol >= 0 ? numberFrom(row[latencyCol]) : 0;
+    if (/所有\s*进程|全部\s*进程|all\s*process/iu.test(text)) item.allProcess = processLoadFromRow(row, loadCol, /所有\s*进程|全部\s*进程|all\s*process/iu) || item.allProcess;
+    if (/UI\s*(进程|线程|process|thread)?/iu.test(text)) item.uiProcess = processLoadFromRow(row, loadCol, /UI\s*(进程|线程|process|thread)?/iu) || item.uiProcess;
+    if (/render[\s_-]*(service|进程|线程|process|thread)|renderservice/iu.test(text)) item.renderService = processLoadFromRow(row, loadCol, /render[\s_-]*(service|进程|线程|process|thread)|renderservice/iu) || item.renderService;
+    if (!item.avgFreqMhz) item.avgFreqMhz = numberNear(row, freqCol, (num) => num > 300 && num < 10000);
+    if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = numberNear(row, fpsCol, (num) => num > 100 && num < 300) || numberNear(row, fpsCol, (num) => num > 0 && num <= 300);
+    if (!parsed.hizee.scene.ddrFreqMhz) parsed.hizee.scene.ddrFreqMhz = numberNear(row, ddrCol, (num) => num > 300 && num < 10000);
+    if (!parsed.hizee.scene.bandwidth) parsed.hizee.scene.bandwidth = numberNear(row, bandwidthCol, (num) => num > 0 && num < 1000);
+    if (!parsed.hizee.scene.latency) parsed.hizee.scene.latency = numberNear(row, latencyCol, (num) => num > 0 && num < 10000);
   }
   parsed.hizee.clusters = clusters.map((cluster) => clusterSeen.get(cluster) || { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
 }
@@ -828,6 +827,39 @@ function valueAtOrNear(row, index, label) {
   const cells = normalizeRow(row);
   if (index >= 0 && numberFrom(cells[index])) return numberFrom(cells[index]);
   return firstPercentNear(row, label);
+}
+
+function processLoadFromRow(row, loadCol, labelPattern) {
+  const cells = normalizeRow(row);
+  if (loadCol >= 0) {
+    const direct = numberFrom(cells[loadCol]);
+    if (direct > 0 && direct <= 100) return direct;
+    const nearby = firstNumberInRange(cells, loadCol, loadCol + 4, (num) => num > 0 && num <= 100);
+    if (nearby) return nearby;
+  }
+  const labelIndex = cells.findIndex((cell) => labelPattern.test(clean(cell)));
+  if (labelIndex >= 0) return firstNumberInRange(cells, labelIndex, labelIndex + 6, (num) => num > 0 && num <= 100);
+  return 0;
+}
+
+function numberNear(row, index, predicate, radius = 3) {
+  const cells = normalizeRow(row);
+  if (index >= 0) {
+    const direct = numberFrom(cells[index]);
+    if (direct && predicate(direct)) return direct;
+    const nearby = firstNumberInRange(cells, Math.max(0, index - 1), Math.min(cells.length - 1, index + radius), predicate);
+    if (nearby) return nearby;
+    return 0;
+  }
+  return firstNumberInRange(cells, 0, cells.length - 1, predicate);
+}
+
+function firstNumberInRange(cells, start, end, predicate) {
+  for (let c = Math.max(0, start); c <= Math.min(cells.length - 1, end); c += 1) {
+    const value = numberFrom(cells[c]);
+    if (value && predicate(value)) return value;
+  }
+  return 0;
 }
 
 function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
