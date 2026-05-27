@@ -1127,8 +1127,8 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
     if (isHotspotDimensionRow(row, "fe")) dimension = "fe";
     if (isHotspotDimensionRow(row, "be")) dimension = "be";
     const indexed = normalizeRow(row).map((cell, column) => ({ cell, column, text: clean(cell) })).filter((item) => item.text);
-    const threadCell = indexed.find((item) => item.column <= 2 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
-      || indexed.find((item) => item.column <= 2 && looksLikeThreadName(item.text));
+    const threadCell = indexed.find((item) => item.column <= 1 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
+      || indexed.find((item) => item.column <= 1 && looksLikeThreadName(item.text));
     if (threadCell) {
       const parsedThread = parseNamedPercent(threadCell.text);
       currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", parsedThread.value);
@@ -1181,7 +1181,7 @@ function isFunctionCell(value) {
 }
 
 function looksLikeHotspotSoCell(item) {
-  if (!item || item.column < 3 || item.column > 5) return false;
+  if (!item || item.column < 2 || item.column > 4) return false;
   const parsed = parseNamedPercent(item.text);
   if (!parsed.name || !parsed.value) return false;
   if (looksLikeThreadName(item.text) || isFunctionCell(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
@@ -1189,7 +1189,7 @@ function looksLikeHotspotSoCell(item) {
 }
 
 function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
-  if (!item || item.column < 6) return false;
+  if (!item || item.column < 5 || item.column > 7) return false;
   if (firstLibraryColumn >= 0 && item.column <= firstLibraryColumn) return false;
   const parsed = parseNamedPercent(item.text);
   if (!parsed.name || !parsed.value) return false;
