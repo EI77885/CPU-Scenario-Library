@@ -387,8 +387,9 @@ function renderTrendPage() {
       label: scenario.base.name,
       detail: scenario.base.platform,
       value: getMetricValue(scenario, metric.key, state.threadTypes),
-    }))).filter((row) => toFiniteNumber(row.value) > 0).sort((a, b) => toFiniteNumber(b.value) - toFiniteNumber(a.value));
-  const averageValue = trendRows.length ? roundTwo(trendRows.reduce((sum, row) => sum + toFiniteNumber(row.value), 0) / trendRows.length) : null;
+    }))).sort((a, b) => (toFiniteNumber(b.value) ?? -1) - (toFiniteNumber(a.value) ?? -1));
+  const trendValues = trendRows.map((row) => toFiniteNumber(row.value)).filter((value) => value != null);
+  const averageValue = trendValues.length ? roundTwo(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length) : null;
   const snapshotKey = getTrendSnapshotKey(metric, trendRows);
   const isSaved = state.savedTrends.some((snapshot) => snapshot.key === snapshotKey);
   return h("div", { class: "page-grid" }, [

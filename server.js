@@ -20,6 +20,7 @@ const types = {
   ".css": "text/css; charset=utf-8",
   ".png": "image/png",
 };
+const NA = "NA";
 
 function dbExists() {
   return fs.existsSync(dbPath);
@@ -102,13 +103,13 @@ function scenarioFull(db, scenarioId) {
         littleRunning: runningForScope(hizeeClusters[0], index),
         midRunning: runningForScope(hizeeClusters[1], index),
         bigRunning: runningForScope(hizeeClusters[2], index),
-        littleFreq: round2(hizeeClusters[0]?.avg_freq_mhz),
-        midFreq: round2(hizeeClusters[1]?.avg_freq_mhz),
-        bigFreq: round2(hizeeClusters[2]?.avg_freq_mhz),
-        fps: round2(hizeeScene.fps),
-        ddrFreq: round2(hizeeScene.ddr_freq_mhz),
-        bandwidth: round2(hizeeScene.bandwidth),
-        latency: round2(hizeeScene.latency),
+        littleFreq: valueOrNA(hizeeClusters[0], "avg_freq_mhz"),
+        midFreq: valueOrNA(hizeeClusters[1], "avg_freq_mhz"),
+        bigFreq: valueOrNA(hizeeClusters[2], "avg_freq_mhz"),
+        fps: valueOrNA(hizeeScene, "fps"),
+        ddrFreq: valueOrNA(hizeeScene, "ddr_freq_mhz"),
+        bandwidth: valueOrNA(hizeeScene, "bandwidth"),
+        latency: valueOrNA(hizeeScene, "latency"),
       })),
     },
     topdownInfo: threads.map((thread) => buildTopdown(db, thread)),
@@ -123,8 +124,8 @@ function scenarioFull(db, scenarioId) {
 }
 
 function runningForScope(row, index) {
-  if (!row) return 0;
-  return round2([row.all_process_running, row.ui_process_running, row.render_service_running][index]);
+  if (!row) return NA;
+  return valueAtOrNA([row.all_process_running, row.ui_process_running, row.render_service_running][index]);
 }
 
 function round2(value) {
@@ -132,53 +133,81 @@ function round2(value) {
   return Number.isFinite(number) ? Number(number.toFixed(2)) : 0;
 }
 
+function valueAtOrNA(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : NA;
+}
+
+function valueOrNA(row, key) {
+  return row && Object.hasOwn(row, key) ? valueAtOrNA(row[key]) : NA;
+}
+
+function isNA(value) {
+  return value === NA || value == null || value === "";
+}
+
+function toMetricNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function roundValueRow(row) {
-  return { ...row, value: round2(row.value) };
+  return row ? { ...row, value: valueAtOrNA(row.value) } : { value: NA };
 }
 
 function buildTopdown(db, thread) {
   const rows = all(db, "SELECT * FROM topdown_metrics WHERE thread_id = ?", [thread.id]);
-  const level1 = (scope) => Object.fromEntries(topdownLevel1.map((metric) => [metric, round2(rows.find((row) => row.scope === scope && row.level === 1 && row.metric === metric)?.value)]));
+  const valueFor = (scope, metric, level = null) => {
+    const row = rows.find((item) => item.scope === scope && item.metric === metric && (level == null || item.level === level));
+    return row ? valueAtOrNA(row.value) : NA;
+  };
+  const level1 = (scope) => Object.fromEntries(topdownLevel1.map((metric) => [metric, valueFor(scope, metric, 1)]));
   return {
     name: thread.name,
     threadType: thread.threadType,
     loadShare: round2(thread.loadShare),
-    total: { level1: level1("total"), hierarchy: buildHierarchy(rows) },
+    total: { level1: level1("total"), hierarchy: buildHierarchy(rows, valueFor) },
     kernel: { level1: level1("kernel") },
   };
 }
 
-function buildHierarchy(rows) {
-  const nodes = rows.filter((row) => row.scope === "total" && row.level > 1);
+function buildHierarchy(rows, valueFor) {
   const groupNames = ["MPKI", "FE BOUND", "BE BOUND", "LINX MEMSTALL PKI", "CACHE REFILL PKI", "TLB REFILL & PREFETCH PKI"];
   return groupNames.map((metric) => {
-    const level2 = nodes.filter((row) => row.level === 2 && row.parent === metric).map((row) => ({
-      name: row.metric,
-      value: round2(row.value),
-      level3: nodes.filter((child) => child.level === 3 && child.parent === row.metric).map((child) => ({ name: child.metric, value: round2(child.value) })),
+    const level2Names = topdownNodes.filter((name) => topdownLevel(name, topdownParent(name)) === 2 && topdownParent(name) === metric);
+    const level2 = level2Names.map((name) => ({
+      name,
+      value: valueFor("total", name, 2),
+      level3: topdownNodes
+        .filter((child) => topdownLevel(child, topdownParent(child)) === 3 && topdownParent(child) === name)
+        .map((child) => ({ name: child, value: valueFor("total", child, 3) })),
     }));
     return { metric, unit: metric === "MPKI" ? "PKI" : "PKI", kind: metric.includes("PKI") && !["MPKI", "FE BOUND", "BE BOUND"].includes(metric) ? "diagnostic" : "", level2 };
-  }).filter((group) => group.level2.length);
+  }).filter((group) => group.level2.length || rows.some((row) => row.scope === "total" && row.parent === group.metric));
 }
 
 function buildInstruction(db, thread) {
   const rows = all(db, "SELECT * FROM instruction_metrics WHERE thread_id = ?", [thread.id]);
+  const valueFor = (scope, event) => {
+    const row = rows.find((item) => item.scope === scope && item.event === event);
+    return row ? valueAtOrNA(row.value) : NA;
+  };
   return {
     name: thread.name,
     threadType: thread.threadType,
     loadShare: round2(thread.loadShare),
-    total: instructionEvents.map((event) => ({ name: event, value: round2(rows.find((row) => row.scope === "total" && row.event === event)?.value) })),
-    kernel: instructionEvents.map((event) => ({ name: event, value: round2(rows.find((row) => row.scope === "kernel" && row.event === event)?.value) })),
+    total: instructionEvents.map((event) => ({ name: event, value: valueFor("total", event) })),
+    kernel: instructionEvents.map((event) => ({ name: event, value: valueFor("kernel", event) })),
   };
 }
 
 function buildSyscall(db, thread) {
-  const metric = db.prepare("SELECT density FROM syscall_metrics WHERE thread_id = ?").get(thread.id) || {};
+  const metric = db.prepare("SELECT density FROM syscall_metrics WHERE thread_id = ?").get(thread.id);
   return {
     name: thread.name,
     threadType: thread.threadType,
     loadShare: round2(thread.loadShare),
-    density: round2(metric.density),
+    density: metric ? valueAtOrNA(metric.density) : NA,
     calls: all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]).map(roundValueRow),
   };
 }
@@ -191,10 +220,10 @@ function buildHotspots(db, scenarioId, dimension, threads) {
       name: thread.name,
       threadType: thread.threadType,
       loadShare: round2(thread.loadShare),
-      score: round2(row.score),
+      score: valueAtOrNA(row.score),
       sos: all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank", [row.id]).map((so) => ({
         name: so.name,
-        value: round2(so.value),
+        value: valueAtOrNA(so.value),
         funcs: all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]).map(roundValueRow),
       })),
     };
@@ -287,10 +316,11 @@ function trendResponse(db, query) {
         dimension: hotspotDimension(featureKey),
         value: metricValue(scenario, featureKey, thread),
       }));
-  }).filter((row) => row.value > 0).sort((a, b) => b.value - a.value);
+  }).sort((a, b) => (toMetricNumber(b.value) ?? -1) - (toMetricNumber(a.value) ?? -1));
+  const validValues = rows.map((row) => toMetricNumber(row.value)).filter((value) => value != null);
   return {
     feature: featureMeta,
-    average: rows.length ? round2(rows.reduce((sum, row) => sum + row.value, 0) / rows.length) : 0,
+    average: validValues.length ? round2(validValues.reduce((sum, value) => sum + value, 0) / validValues.length) : NA,
     rows,
   };
 }
@@ -298,56 +328,60 @@ function trendResponse(db, query) {
 function metricValue(scenario, key, thread) {
   if (key.startsWith("cluster.")) {
     const [, index, stateName] = key.split(".");
-    const running = scenario.loadInfo.clusterRunning[Number(index)]?.value || 0;
+    const running = metricValueOrNA(scenario.loadInfo.clusterRunning[Number(index)]?.value);
+    if (isNA(running)) return NA;
     return stateName === "idle" ? round2(100 - running) : round2(running);
   }
   if (key.startsWith("process.")) {
     const name = key.slice("process.".length);
-    return avg(scenario.loadInfo.processRunning.map((row) => row.items.find((item) => item.name === name)?.value || 0));
+    return avg(scenario.loadInfo.processRunning.map((row) => row.items.find((item) => item.name === name)?.value));
   }
   if (key.startsWith("threadload.")) {
     const name = key.slice("threadload.".length);
-    return avg(scenario.loadInfo.threadRunning.map((row) => row.items.find((item) => item.name === name)?.value || 0));
+    return avg(scenario.loadInfo.threadRunning.map((row) => row.items.find((item) => item.name === name)?.value));
   }
-  if (key.startsWith("hizee.scene.")) return scenario.loadInfo.hizeeRows[0]?.[key.split(".")[2]] || 0;
-  if (key.startsWith("hizee.freq.")) return scenario.loadInfo.hizeeRows[0]?.[key.split(".")[2]] || 0;
+  if (key.startsWith("hizee.scene.")) return metricValueOrNA(scenario.loadInfo.hizeeRows[0]?.[key.split(".")[2]]);
+  if (key.startsWith("hizee.freq.")) return metricValueOrNA(scenario.loadInfo.hizeeRows[0]?.[key.split(".")[2]]);
   if (key.startsWith("hizee.running.")) {
     const [, , rowIndex, field] = key.split(".");
-    return scenario.loadInfo.hizeeRows[Number(rowIndex)]?.[field] || 0;
+    return metricValueOrNA(scenario.loadInfo.hizeeRows[Number(rowIndex)]?.[field]);
   }
-  if (!thread) return 0;
+  if (!thread) return NA;
   if (key.startsWith("topdown.level1.")) {
     const [, , scope, metric] = key.split(".");
-    return thread[scope]?.level1?.[metric] || 0;
+    return metricValueOrNA(thread[scope]?.level1?.[metric]);
   }
   if (key.startsWith("topdown.node.")) return findTopdownNodeValue(thread.total?.hierarchy || [], key.slice("topdown.node.".length));
   if (key.startsWith("inst.")) {
     const [, scope, event] = key.split(".");
     const source = scenario.instructionMix.find((item) => item.name === thread.name && item.threadType === thread.threadType);
-    return source?.[scope]?.find((item) => item.name === event)?.value || 0;
+    return metricValueOrNA(source?.[scope]?.find((item) => item.name === event)?.value);
   }
   if (key === "syscall.density") {
-    return scenario.syscallInfo.find((item) => item.name === thread.name && item.threadType === thread.threadType)?.density || 0;
+    return metricValueOrNA(scenario.syscallInfo.find((item) => item.name === thread.name && item.threadType === thread.threadType)?.density);
   }
   if (key.startsWith("syscall.share.")) {
     const name = key.slice("syscall.share.".length);
     const source = scenario.syscallInfo.find((item) => item.name === thread.name && item.threadType === thread.threadType);
-    return source?.calls.find((item) => item.name === name)?.value || 0;
+    return metricValueOrNA(source?.calls.find((item) => item.name === name)?.value);
   }
   if (key.startsWith("hotspot.")) {
     const [, dimension, kind, encodedName] = key.split(".");
     const targetName = decodeURIComponent(encodedName);
     const source = scenario.hotspotInfo[dimension]?.find((item) => item.name === thread.name && item.threadType === thread.threadType);
-    if (!source) return 0;
-    if (kind === "so") return source.sos.find((so) => so.name === targetName)?.value || 0;
-    const values = source.sos.flatMap((so) => so.funcs.filter((fn) => fn.name === targetName).map((fn) => fn.value));
-    return values.length ? Math.max(...values) : 0;
+    if (!source) return NA;
+    if (kind === "so") return metricValueOrNA(source.sos.find((so) => so.name === targetName)?.value);
+    const values = source.sos
+      .flatMap((so) => so.funcs.filter((fn) => fn.name === targetName).map((fn) => toMetricNumber(fn.value)))
+      .filter((value) => value != null);
+    return values.length ? Math.max(...values) : NA;
   }
-  return 0;
+  return NA;
 }
 
 function avg(values) {
-  return values.length ? round2(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
+  const validValues = values.map((value) => toMetricNumber(value)).filter((value) => value != null);
+  return validValues.length ? round2(validValues.reduce((sum, value) => sum + value, 0) / validValues.length) : NA;
 }
 
 function findTopdownNodeValue(groups, name) {
@@ -358,7 +392,31 @@ function findTopdownNodeValue(groups, name) {
       if (level3) return level3.value;
     }
   }
-  return 0;
+  return NA;
+}
+
+function metricValueOrNA(value) {
+  return isNA(value) ? NA : value;
+}
+
+function topdownParent(metric) {
+  if (topdownLevel1.includes(metric)) return "";
+  if (/^(BAD_|BR_)/u.test(metric)) return "MPKI";
+  if (/^STALL_FRONTEND_(L1I|MEM|TLB)$/u.test(metric)) return "STALL_FRONTEND_MEMBOUND";
+  if (/^STALL_FRONTEND_(FLOW|FLUSH|RENAME)$/u.test(metric)) return "STALL_FRONTEND_CPUBOUND_PKI";
+  if (/^STALL_FRONTEND/u.test(metric)) return "FE BOUND";
+  if (/^STALL_BACKEND_(L1D|MEM|TLB|ST)$/u.test(metric)) return "STALL_BACKEND_MEMBOUND";
+  if (/^STALL_BACKEND/u.test(metric)) return "BE BOUND";
+  if (/^MEMSTALL/u.test(metric)) return "LINX MEMSTALL PKI";
+  if (/TLB|PRFM|HWPRF|PAGE_FAULT/u.test(metric)) return "TLB REFILL & PREFETCH PKI";
+  if (/CACHE_REFILL/u.test(metric)) return "CACHE REFILL PKI";
+  return "";
+}
+
+function topdownLevel(metric, parent = topdownParent(metric)) {
+  if (topdownLevel1.includes(metric)) return 1;
+  if (!parent || topdownLevel1.includes(parent) || ["LINX MEMSTALL PKI", "CACHE REFILL PKI", "TLB REFILL & PREFETCH PKI"].includes(parent)) return 2;
+  return 3;
 }
 
 function hotspotDimension(key) {
