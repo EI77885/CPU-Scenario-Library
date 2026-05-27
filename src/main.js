@@ -112,6 +112,7 @@ function render() {
   const app = document.querySelector("#app");
   app.innerHTML = "";
   app.append(renderShell());
+  scheduleCompareHeightSync();
 }
 
 function renderShell() {
@@ -210,6 +211,62 @@ function renderCompareSection(title, scenariosToShow, renderer) {
     h("div", { class: "section-title" }, [h("h2", {}, [title]), h("span", {}, [`${scenariosToShow.length} 个场景`])]),
     h("div", { class: "compare-grid", style: `--cols:${Math.max(1, scenariosToShow.length)}` }, scenariosToShow.map(renderer)),
   ]);
+}
+
+const compareSyncSelectors = [
+  ":scope > .card-head",
+  ":scope > h3",
+  ":scope > .badge-row",
+  ":scope > .info-row",
+  ":scope > h4",
+  ":scope > .chart-panel",
+  ":scope > .hizee-matrix-wrap",
+  ":scope > .thread-block",
+  ":scope > details.thread-block",
+  ":scope > .hotspot-dimensions > .hotspot-dimension",
+  ":scope > .hotspot-dimensions > .hotspot-dimension .hotspot-thread",
+  ":scope > .hotspot-dimensions > .hotspot-dimension .so-card",
+];
+
+let compareHeightSyncFrame = 0;
+
+function scheduleCompareHeightSync() {
+  if (compareHeightSyncFrame) cancelAnimationFrame(compareHeightSyncFrame);
+  compareHeightSyncFrame = requestAnimationFrame(() => {
+    compareHeightSyncFrame = 0;
+    syncCompareHeights();
+  });
+}
+
+function syncCompareHeights() {
+  document.querySelectorAll("[data-sync-min-height]").forEach((element) => {
+    element.style.minHeight = "";
+    element.removeAttribute("data-sync-min-height");
+  });
+  if (state.page !== "compare") return;
+  document.querySelectorAll(".compare-grid").forEach((grid) => {
+    const cards = [...grid.querySelectorAll(":scope > .card")];
+    if (cards.length <= 1 || cards[0].getBoundingClientRect().width >= grid.getBoundingClientRect().width - 1) return;
+    compareSyncSelectors.forEach((selector) => syncElementsByIndex(cards, selector));
+  });
+}
+
+function syncElementsByIndex(cards, selector) {
+  const groups = [];
+  cards.forEach((card) => {
+    card.querySelectorAll(selector).forEach((element, index) => {
+      if (!groups[index]) groups[index] = [];
+      groups[index].push(element);
+    });
+  });
+  groups.forEach((elements) => {
+    if (!elements || elements.length <= 1) return;
+    const maxHeight = Math.ceil(Math.max(...elements.map((element) => element.getBoundingClientRect().height)));
+    elements.forEach((element) => {
+      element.style.minHeight = `${maxHeight}px`;
+      element.setAttribute("data-sync-min-height", "true");
+    });
+  });
 }
 
 function renderBaseCard(scenario) {
@@ -523,6 +580,10 @@ function renderSavedTrends() {
     ]))),
   ]);
 }
+
+window.addEventListener("resize", () => {
+  if (state.page === "compare") scheduleCompareHeightSync();
+});
 
 function selectedTrendThreads(scenario) {
   return scenario.topdownInfo.filter((thread) => state.threadTypes.has(getThreadType(thread)));
