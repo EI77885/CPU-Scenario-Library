@@ -808,11 +808,13 @@ function parseOneSheetHizee(rows, sections, parsed) {
       if (rowIndex === 2) item.renderService = item.renderService || orderedLoadValue;
       clusterLoadRows.set(cluster, rowIndex + 1);
     }
-    if (!item.avgFreqMhz) item.avgFreqMhz = numberNear(row, freqCol, (num) => num > 300 && num < 10000);
-    if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = numberNear(row, fpsCol, (num) => num > 100 && num < 300) || numberNear(row, fpsCol, (num) => num > 0 && num <= 300);
-    if (!parsed.hizee.scene.ddrFreqMhz) parsed.hizee.scene.ddrFreqMhz = numberNear(row, ddrCol, (num) => num > 300 && num < 10000);
-    if (!parsed.hizee.scene.bandwidth) parsed.hizee.scene.bandwidth = numberNear(row, bandwidthCol, (num) => num > 0 && num < 1000);
-    if (!parsed.hizee.scene.latency) parsed.hizee.scene.latency = numberNear(row, latencyCol, (num) => num > 0 && num < 10000);
+    if (loadSlot === "all" || clusterFromRow(row)) {
+      if (!item.avgFreqMhz) item.avgFreqMhz = numberAtOrNear(row, freqCol, (num) => num > 300 && num < 10000);
+      if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = numberAtOrNear(row, fpsCol, (num) => num > 0 && num <= 300);
+      if (!parsed.hizee.scene.ddrFreqMhz) parsed.hizee.scene.ddrFreqMhz = numberAtOrNear(row, ddrCol, (num) => num > 300 && num < 10000);
+      if (!parsed.hizee.scene.bandwidth) parsed.hizee.scene.bandwidth = numberAtOrNear(row, bandwidthCol, (num) => num > 0 && num < 1000);
+      if (!parsed.hizee.scene.latency) parsed.hizee.scene.latency = numberAtOrNear(row, latencyCol, (num) => num > 0 && num < 10000);
+    }
   }
   parsed.hizee.clusters = clusters.map((cluster) => clusterSeen.get(cluster) || { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
 }
@@ -875,17 +877,13 @@ function processLoadFromRow(row, loadCol, loadEndCol, labelPattern) {
   const effectiveLoadEndCol = Number.isFinite(loadEndCol) ? Math.min(loadEndCol, cells.length - 1) : cells.length - 1;
   const labelIndex = cells.findIndex((cell) => labelPattern.test(clean(cell)));
   if (labelIndex >= 0) {
-    const inline = numberFrom(cells[labelIndex]);
-    if (inline > 0 && inline <= 100) return inline;
-    const afterLabel = firstLikelyPercentInRange(cells, labelIndex + 1, Math.min(effectiveLoadEndCol, labelIndex + 10));
+    const afterLabel = firstLikelyPercentInRange(cells, labelIndex + 1, Math.min(effectiveLoadEndCol, labelIndex + 2));
     if (afterLabel) return afterLabel;
-    const beforeLabel = firstLikelyPercentInRange(cells, Math.max(0, labelIndex - 3), labelIndex - 1);
-    if (beforeLabel) return beforeLabel;
   }
   if (loadCol >= 0) {
     const direct = numberFrom(cells[loadCol]);
     if (direct > 0 && direct <= 100) return direct;
-    const nearby = firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 8));
+    const nearby = firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 2));
     if (nearby) return nearby;
   }
   return 0;
@@ -894,7 +892,7 @@ function processLoadFromRow(row, loadCol, loadEndCol, labelPattern) {
 function hizeeLoadValueFromRow(row, loadCol, loadEndCol) {
   const cells = normalizeRow(row);
   const effectiveLoadEndCol = Number.isFinite(loadEndCol) ? Math.min(loadEndCol, cells.length - 1) : cells.length - 1;
-  if (loadCol >= 0) return firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 8));
+  if (loadCol >= 0) return firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 2));
   return firstLikelyPercentInRange(cells, 0, effectiveLoadEndCol);
 }
 
@@ -917,6 +915,14 @@ function numberNear(row, index, predicate, radius = 3) {
     return 0;
   }
   return firstNumberInRange(cells, 0, cells.length - 1, predicate);
+}
+
+function numberAtOrNear(row, index, predicate) {
+  const cells = normalizeRow(row);
+  if (index < 0) return 0;
+  const direct = numberFrom(cells[index]);
+  if (direct && predicate(direct)) return direct;
+  return firstNumberInRange(cells, Math.max(0, index - 1), Math.min(cells.length - 1, index + 1), predicate);
 }
 
 function firstNumberInRange(cells, start, end, predicate) {
