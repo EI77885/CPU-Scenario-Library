@@ -165,7 +165,28 @@ function parseSharedStrings(xlsxPath) {
   );
 }
 
-function parseSheet(xml, sharedStrings = []) {
+function parseStyles(xlsxPath) {
+  const xml = unzipText(xlsxPath, "xl/styles.xml", true);
+  if (!xml) return { percentStyleIds: new Set() };
+  const customPercentFormats = new Set(
+    [...xml.matchAll(/<numFmt\b([^>]*)\/?>/gu)]
+      .filter((match) => decodeXml(match[1]).includes("%"))
+      .map((match) => Number(match[1].match(/\bnumFmtId="(\d+)"/u)?.[1]))
+      .filter(Number.isFinite),
+  );
+  const builtInPercentFormats = new Set([9, 10]);
+  const percentStyleIds = new Set();
+  const cellXfs = xml.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/u)?.[1] || "";
+  let styleIndex = 0;
+  for (const match of cellXfs.matchAll(/<xf\b([^>]*)\/?>/gu)) {
+    const numFmtId = Number(match[1].match(/\bnumFmtId="(\d+)"/u)?.[1] || 0);
+    if (builtInPercentFormats.has(numFmtId) || customPercentFormats.has(numFmtId)) percentStyleIds.add(styleIndex);
+    styleIndex += 1;
+  }
+  return { percentStyleIds };
+}
+
+function parseSheet(xml, sharedStrings = [], styles = { percentStyleIds: new Set() }) {
   const rows = [];
   for (const rowMatch of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/gu)) {
     const rowIndex = Number(rowMatch[1]) - 1;
@@ -183,6 +204,11 @@ function parseSheet(xml, sharedStrings = []) {
       const valueMatch = body.match(/<v>([\s\S]*?)<\/v>/u);
       let raw = textMatch != null ? decodeXml(textMatch) : valueMatch ? decodeXml(valueMatch[1]) : "";
       if (shared && raw !== "") raw = sharedStrings[Number(raw)] ?? raw;
+      const styleId = Number(attrs.match(/\bs="(\d+)"/u)?.[1] || 0);
+      if (!shared && textMatch == null && raw !== "" && styles.percentStyleIds.has(styleId)) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric)) raw = String(numeric * 100);
+      }
       row[index] = coerceCell(raw);
     }
     rows[rowIndex] = row;
@@ -241,11 +267,12 @@ function isBlankRow(row = []) {
 
 function readWorkbook(xlsxPath) {
   const sharedStrings = parseSharedStrings(xlsxPath);
+  const styles = parseStyles(xlsxPath);
   const entries = zipList(xlsxPath).filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/u.test(entry));
   const sheets = entries.map((entry, index) => ({
     name: `sheet${index + 1}`,
     entry,
-    rows: parseSheet(unzipText(xlsxPath, entry), sharedStrings),
+    rows: parseSheet(unzipText(xlsxPath, entry), sharedStrings, styles),
   }));
   return {
     sheets,
@@ -741,14 +768,19 @@ function locateSections(rows) {
 
 function parseOneSheetHizee(rows, sections, parsed) {
   const safe = safeRows(rows);
-  const headerIndex = safe.findIndex((row) => row.some((cell) => includesText(cell, "平均频率")));
+  const headerIndex = safe.findIndex((row) => {
+    const text = rowText(row);
+    const hits = [/负载|running/iu, /平均帧率|fps/iu, /平均频率/iu, /DDR/iu, /平均带宽|bandwidth/iu, /latency|时延/iu]
+      .filter((pattern) => pattern.test(text)).length;
+    return hits >= 2;
+  });
   const header = safe[headerIndex] || [];
-  const loadCol = header.findIndex((cell) => includesText(cell, "负载"));
-  const fpsCol = header.findIndex((cell) => includesText(cell, "平均帧率"));
-  const freqCol = header.findIndex((cell) => includesText(cell, "平均频率"));
-  const ddrCol = header.findIndex((cell) => includesText(cell, "DDR"));
-  const bandwidthCol = header.findIndex((cell) => includesText(cell, "平均带宽"));
-  const latencyCol = header.findIndex((cell) => includesText(cell, "latency"));
+  const loadCol = header.findIndex((cell) => /负载|running/iu.test(clean(cell)));
+  const fpsCol = header.findIndex((cell) => /平均帧率|fps/iu.test(clean(cell)));
+  const freqCol = header.findIndex((cell) => /平均频率/iu.test(clean(cell)) && !/DDR/iu.test(clean(cell)));
+  const ddrCol = header.findIndex((cell) => /DDR/iu.test(clean(cell)));
+  const bandwidthCol = header.findIndex((cell) => /平均带宽|bandwidth/iu.test(clean(cell)));
+  const latencyCol = header.findIndex((cell) => /latency|时延/iu.test(clean(cell)));
   const searchRows = safe.slice(headerIndex >= 0 ? headerIndex + 1 : sections.load ?? 0, sections.topdown ?? safe.length);
   let currentCluster = "";
   const clusterSeen = new Map();
@@ -759,9 +791,9 @@ function parseOneSheetHizee(rows, sections, parsed) {
     if (!cluster) continue;
     if (!clusterSeen.has(cluster)) clusterSeen.set(cluster, { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
     const item = clusterSeen.get(cluster);
-    if (/所有进程/u.test(text)) item.allProcess = valueAtOrNear(row, loadCol, "所有进程") || item.allProcess;
-    if (/UI进程/u.test(text)) item.uiProcess = valueAtOrNear(row, loadCol, "UI进程") || item.uiProcess;
-    if (/render service/u.test(text)) item.renderService = valueAtOrNear(row, loadCol, "render service") || item.renderService;
+    if (/所有进程|all\s*process/iu.test(text)) item.allProcess = valueAtOrNear(row, loadCol, "所有进程") || item.allProcess;
+    if (/(^|\s|[^\w])UI\s*进程|UI\s*process/iu.test(text)) item.uiProcess = valueAtOrNear(row, loadCol, "UI进程") || item.uiProcess;
+    if (/render[\s_-]*service|renderservice/iu.test(text)) item.renderService = valueAtOrNear(row, loadCol, "render service") || item.renderService;
     const nums = row.filter((cell) => typeof cell === "number");
     if (!item.avgFreqMhz) item.avgFreqMhz = freqCol >= 0 ? numberFrom(row[freqCol]) : nums.find((num) => num > 300 && num < 5000) || 0;
     if (!parsed.hizee.scene.fps) parsed.hizee.scene.fps = fpsCol >= 0 ? numberFrom(row[fpsCol]) : 0;

@@ -19,6 +19,7 @@ const cellStyles = {
   title: 4,
   metric: 5,
   red: 6,
+  percent: 7,
 };
 
 const topdownTotalRows = [
@@ -192,6 +193,11 @@ function percentText(value) {
   return Number.isFinite(number) ? `${number.toFixed(2)}%` : "";
 }
 
+function percentNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number((number / 100).toFixed(6)) : "";
+}
+
 function targetSheetForScenario(scenario) {
   const appName = scenario.base.name.split("_")[0];
   const sheet = createSheet(260, 12);
@@ -244,7 +250,7 @@ function targetSheetForScenario(scenario) {
     sheet.row(row, [
       `${cluster.cluster}cluster`,
       "所有进程",
-      percentText(cluster.allProcessRunning),
+      percentNumber(cluster.allProcessRunning),
       index === 0 ? scenario.loadInfo.hizee.scene.fps : "",
       cluster.avgFreqMhz,
       "",
@@ -252,8 +258,9 @@ function targetSheetForScenario(scenario) {
       index === 0 ? scenario.loadInfo.hizee.scene.bandwidth : "",
       index === 0 ? scenario.loadInfo.hizee.scene.latency : "",
     ]);
-    sheet.row(row + 1, ["", "UI进程", percentText(cluster.uiProcessRunning)]);
-    sheet.row(row + 2, ["", "render service进程", percentText(cluster.renderServiceRunning)]);
+    sheet.row(row + 1, ["", "UI进程", percentNumber(cluster.uiProcessRunning)]);
+    sheet.row(row + 2, ["", "render service进程", percentNumber(cluster.renderServiceRunning)]);
+    sheet.rangeStyle(row, 3, row + 2, 3, cellStyles.percent);
   });
   sheet.set(36, 3, "卡顿次数");
 
@@ -524,7 +531,7 @@ function stylesXml() {
     <border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border>
   </borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="7">
+  <cellXfs count="8">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyAlignment="1" applyBorder="1" applyFill="1" applyFont="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
@@ -532,6 +539,7 @@ function stylesXml() {
     <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyAlignment="1" applyBorder="1" applyFill="1" applyFont="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyAlignment="1" applyBorder="1" applyFill="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyAlignment="1" applyBorder="1" applyFont="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="10" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyAlignment="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
   <dxfs count="0"/>
