@@ -223,6 +223,15 @@ const compareSyncSelectors = [
   ":scope > .hizee-matrix-wrap",
   ":scope > .thread-block",
   ":scope > details.thread-block",
+  ":scope > .thread-block .topdown-tree > .tree-note",
+  ":scope > .thread-block .topdown-tree > .bottleneck-summary",
+  ":scope > .thread-block .topdown-tree > .bottleneck-summary .path-chips",
+  ":scope > .thread-block .topdown-tree > .tree-group",
+  ":scope > .thread-block .topdown-tree > .tree-group > .tree-group-title",
+  ":scope > .thread-block .topdown-tree > .tree-group > .tree-level2",
+  ":scope > .thread-block .topdown-tree > .tree-group > .tree-level2 > .tree-row",
+  ":scope > .thread-block .topdown-tree > .tree-group > .tree-level2 > .tree-level3",
+  ":scope > .thread-block .topdown-tree > .tree-group > .tree-level2 > .tree-level3 > .tree-row",
   ":scope > .hotspot-dimensions > .hotspot-dimension",
   ":scope > .hotspot-dimensions > .hotspot-dimension .hotspot-thread",
   ":scope > .hotspot-dimensions > .hotspot-dimension .so-card",
@@ -235,6 +244,10 @@ function scheduleCompareHeightSync() {
   compareHeightSyncFrame = requestAnimationFrame(() => {
     compareHeightSyncFrame = 0;
     syncCompareHeights();
+    compareHeightSyncFrame = requestAnimationFrame(() => {
+      compareHeightSyncFrame = 0;
+      syncCompareHeights();
+    });
   });
 }
 
