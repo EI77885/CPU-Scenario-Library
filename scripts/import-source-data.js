@@ -1210,14 +1210,23 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
   fixedSyscallRows.forEach((rowIndex, index) => {
     const row = rows[rowIndex];
     const name = fixedSectionThreadName(row, fixedTopdownThreadTypes[index] || "main");
+    const rawDensity = row?.[2];
+    const density = fixedSyscallDensity(row);
+    if (debugMode) logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density);
     if (!name || !/线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(rowText(row))) return;
     const calls = parseSyscallRowCalls(normalizeRow(row).slice(3, 8), 0);
+    if (debugMode) console.warn(`[debug] syscall row${rowIndex + 1} parsed calls=${calls.length} first=${calls[0] ? `${calls[0].number}_${calls[0].name}(${calls[0].share}%)` : "NA"}`);
     if (!calls.length) return;
     const thread = ensureThread(parsed.threads, scenarioId, name, fixedTopdownThreadTypes[index] || inferThreadType(name, index));
-    parsed.syscalls.push({ threadId: thread.id, density: fixedSyscallDensity(row), calls });
+    parsed.syscalls.push({ threadId: thread.id, density, calls });
     count += 1;
   });
   return count;
+}
+
+function logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density) {
+  const refs = ["A", "B", "C", "D", "E", "F", "G", "H"].map((col, colIndex) => `${col}${rowIndex + 1}=${JSON.stringify(clean(normalizeRow(row)[colIndex]))}`);
+  console.warn(`[debug] syscall row${rowIndex + 1} type=${fixedTopdownThreadTypes[index] || ""} name=${JSON.stringify(name)} rawC=${JSON.stringify(rawDensity)} density=${density} ${refs.join(" ")}`);
 }
 
 function fixedSyscallDensity(row) {
@@ -1427,7 +1436,7 @@ function logHotspotCoordinateDebug(rows, block, candidates) {
   const summary = candidates.map((candidate) => `row${candidate.firstThreadStart + 1}:${candidate.records.length}`).join(", ");
   console.warn(`[debug] hotspot ${block.dimension} candidates ${summary}`);
   for (const candidate of candidates) {
-    const sampleRows = [candidate.firstThreadStart, candidate.firstThreadStart + 1, candidate.firstThreadStart + 2]
+    const sampleRows = [candidate.firstThreadStart, candidate.firstThreadStart + 1, candidate.firstThreadStart + 2, candidate.firstThreadStart + 3, candidate.firstThreadStart + 4]
       .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 8).map(clean))}`)
       .join(" ");
     console.warn(`[debug] hotspot ${block.dimension} candidate row${candidate.firstThreadStart + 1} ${sampleRows}`);
@@ -1445,7 +1454,7 @@ function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
   const prioritized = kind === "library"
     ? [...candidates.filter((text) => isLibraryCell(text)), ...candidates.filter((text) => !isLibraryCell(text) && !looksLikeThreadName(text))]
     : kind === "function"
-      ? [...candidates.filter((text) => isFunctionCell(text)), ...candidates.filter((text) => !isFunctionCell(text) && !isLibraryCell(text) && !looksLikeThreadName(text))]
+      ? [...candidates.filter((text) => isFunctionCell(text)), ...candidates.filter((text) => !isFunctionCell(text) && !looksLikeThreadName(text))]
       : candidates;
   for (const text of prioritized) {
     const source = kind ? stripHotspotPrefix(text, kind) : text;
