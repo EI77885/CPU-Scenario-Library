@@ -94,7 +94,7 @@ const threadOrder = ["main", "main", "render", "render", "other", "other"];
 const scopeOrder = ["total", "kernel", "total", "kernel", "total", "kernel"];
 const fixedTopdownBlockStarts = [37, 50, 63];
 const fixedTopdownThreadTypes = ["main", "render", "other"];
-const fixedInstructionBlockStarts = [78, 86, 94];
+const fixedInstructionDataStarts = [79, 87, 95];
 const fixedSyscallRows = [103, 104, 105];
 const fixedHotspotBlocks = [
   { dimension: "cycle", headerRow: 107, startRow: 108 },
@@ -102,11 +102,12 @@ const fixedHotspotBlocks = [
   { dimension: "be", headerRow: 163, startRow: 164 },
 ];
 const fixedInstructionRows = [
-  ["ld/st_retired", "atomic/cas_spec"],
-  ["br_retired", "ld/strex_spec"],
+  ["ld/st_retired", "ld/strex_spec"],
+  ["br_retired", "atomic/cas_spec"],
   ["dp_spec", "unaligned_ldst_spec"],
-  ["ase_spec", "barrier_spec"],
-  ["sve_inst_spec", "vfp_spec"],
+  ["vfp_spec", "barrier_spec"],
+  ["ase_spec", ""],
+  ["sve_inst_spec", ""],
 ];
 const fixedTopdownTotalRows = [
   ["IPC", "FE BOUND", "BE BOUND", "L1D_CACHE_REFILL", "L1D_TLB_REFILL_RD", "MEMSTALL_ANYSTORE"],
@@ -1147,14 +1148,13 @@ function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
 
 function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
   let count = 0;
-  fixedInstructionBlockStarts.forEach((blockStart, blockIndex) => {
-    const headerText = rowText(rows[blockStart]);
-    if (!/线程|thread/iu.test(headerText)) return;
-    const threadName = fixedSectionThreadName(rows[blockStart], fixedTopdownThreadTypes[blockIndex] || "main");
+  fixedInstructionDataStarts.forEach((dataStart, blockIndex) => {
+    const headerRow = dataStart - 1;
+    const threadName = fixedSectionThreadName(rows[headerRow], fixedTopdownThreadTypes[blockIndex] || "main");
     const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
     fixedInstructionRows.forEach(([firstEvent, secondEvent], rowOffset) => {
-      const row = rows[blockStart + 2 + rowOffset];
+      const row = rows[dataStart + rowOffset];
       count += addFixedInstruction(parsed, thread, "total", firstEvent, row?.[1]);
       count += addFixedInstruction(parsed, thread, "total", secondEvent, row?.[3]);
       count += addFixedInstruction(parsed, thread, "kernel", firstEvent, row?.[5]);
@@ -1337,7 +1337,6 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
 function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   for (const block of fixedHotspotBlocks) {
-    if (!isHotspotDimensionRow(rows[block.headerRow] || [], block.dimension)) continue;
     for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
       const threadStart = block.startRow + threadIndex * 9;
       const parsedThread = firstNamedPercentInRange(rows[threadStart], 0, 1);
@@ -1427,7 +1426,7 @@ function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
 }
 
 function stripHotspotPrefix(value, kind) {
-  const text = clean(value);
+  const text = clean(value).replace(/\s+/gu, " ");
   return kind === "library"
     ? text.replace(/^(Library|SO|库|模块)\s*[:：]?\s*/iu, "")
     : text.replace(/^(Function|函数|方法)\s*[:：]?\s*/iu, "");
@@ -1551,8 +1550,9 @@ function isKnownInstruction(value) {
 }
 
 function parseNamedPercent(value) {
-  const match = clean(value).match(/^(.+?)\s*[（(]\s*([\d.]+)\s*[%％]\s*[）)]$/u);
-  return match ? { name: match[1].trim(), value: numberFrom(match[2]) } : { name: clean(value), value: 0 };
+  const text = clean(value).replace(/\s+/gu, " ");
+  const match = text.match(/^(.+?)\s*[（(]\s*([\d.]+)\s*[%％]\s*[）)]$/u);
+  return match ? { name: match[1].trim(), value: numberFrom(match[2]) } : { name: text, value: 0 };
 }
 
 function parseSyscallCalls(calls) {

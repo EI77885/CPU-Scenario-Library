@@ -40,11 +40,12 @@ const topdownKernelRows = [
 ];
 
 const instructionRows = [
-  ["ld/st_retired", "atomic/cas_spec"],
-  ["br_retired", "ld/strex_spec"],
+  ["ld/st_retired", "ld/strex_spec"],
+  ["br_retired", "atomic/cas_spec"],
   ["dp_spec", "unaligned_ldst_spec"],
-  ["ase_spec", "barrier_spec"],
-  ["sve_inst_spec", "vfp_spec"],
+  ["vfp_spec", "barrier_spec"],
+  ["ase_spec", ""],
+  ["sve_inst_spec", ""],
 ];
 
 function xml(value) {
@@ -285,22 +286,21 @@ function targetSheetForScenario(scenario) {
   scenario.threads.forEach((thread, threadIndex) => {
     const start = instructionStarts[threadIndex];
     const threadRows = scenario.instructions.filter((row) => row.threadId === thread.id);
-    sheet.merge(`A${start}:L${start}`);
     sheet.set(start, 1, `${thread.name}线程`);
-    sheet.rangeStyle(start, 1, start, 12, cellStyles.section);
-    sheet.merge(`A${start + 1}:D${start + 1}`);
-    sheet.merge(`E${start + 1}:H${start + 1}`);
-    sheet.set(start + 1, 1, "ALL");
-    sheet.set(start + 1, 5, "Kernel");
-    sheet.rangeStyle(start + 1, 1, start + 1, 8, cellStyles.label);
+    sheet.set(start, 2, "ALL");
+    sheet.set(start, 5, "Kernel");
+    sheet.rangeStyle(start, 1, start, 8, cellStyles.label);
     instructionRows.forEach((events, rowIndex) => {
-      const row = start + 2 + rowIndex;
+      const row = start + 1 + rowIndex;
       sheet.row(row, [
-        ...events.flatMap((event) => [event.toUpperCase() + "_PKI", threadRows.find((item) => item.scope === "total" && item.event === event)?.value ?? ""]),
-        events[0]?.toUpperCase() + "_PKI",
+        events[0] ? events[0].toUpperCase() + "_PKI" : "",
+        events[0] ? threadRows.find((item) => item.scope === "total" && item.event === events[0])?.value ?? "" : "",
+        events[1] ? events[1].toUpperCase() + "_PKI" : "",
+        events[1] ? threadRows.find((item) => item.scope === "total" && item.event === events[1])?.value ?? "" : "",
+        events[0] ? events[0].toUpperCase() + "_PKI" : "",
         threadRows.find((item) => item.scope === "kernel" && item.event === events[0])?.value ?? "",
-        events[1]?.toUpperCase() + "_PKI",
-        threadRows.find((item) => item.scope === "kernel" && item.event === events[1])?.value ?? "",
+        events[1] ? events[1].toUpperCase() + "_PKI" : "",
+        events[1] ? threadRows.find((item) => item.scope === "kernel" && item.event === events[1])?.value ?? "" : "",
       ]);
       sheet.rangeStyle(row, 1, row, 8, cellStyles.metric);
     });
