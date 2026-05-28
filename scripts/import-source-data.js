@@ -1265,7 +1265,7 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
   fixedSyscallRows.forEach((rowIndex, index) => {
     const row = rows[rowIndex];
     const name = fixedSectionThreadName(row, fixedTopdownThreadTypes[index] || "main");
-    const rawDensity = row?.[2];
+    const rawDensity = fixedSyscallDensityRaw(row);
     const density = fixedSyscallDensity(row);
     if (debugMode) logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density);
     if (!name || !/线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(rowText(row))) return;
@@ -1281,22 +1281,28 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
 
 function logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density) {
   const refs = ["A", "B", "C", "D", "E", "F", "G", "H"].map((col, colIndex) => `${col}${rowIndex + 1}=${JSON.stringify(clean(normalizeRow(row)[colIndex]))}`);
-  console.warn(`[debug] syscall row${rowIndex + 1} type=${fixedTopdownThreadTypes[index] || ""} name=${JSON.stringify(name)} rawC=${JSON.stringify(rawDensity)} density=${density} ${refs.join(" ")}`);
-  if (rawDensity === undefined || rawDensity === "") {
-    console.warn(`[debug] syscall row${rowIndex + 1} C${rowIndex + 1} is empty in xlsx XML; if Excel shows a value, save/recalculate the workbook or check whether the value is stored as an unsupported formula/cache.`);
+  console.warn(`[debug] syscall row${rowIndex + 1} type=${fixedTopdownThreadTypes[index] || ""} name=${JSON.stringify(name)} rawDensity=${JSON.stringify(rawDensity)} density=${density} ${refs.join(" ")}`);
+  if (rawDensity == null || rawDensity === "") {
+    console.warn(`[debug] syscall row${rowIndex + 1} density is empty in xlsx XML; checked C${rowIndex + 1} and B${rowIndex + 1}.`);
   }
 }
 
 function fixedSyscallDensity(row) {
-  const direct = numericCellExactOrNull(row?.[2]);
+  const direct = numericCellExactOrNull(fixedSyscallDensityRaw(row));
   if (direct != null) return direct;
   const cells = normalizeRow(row);
-  for (let column = 2; column < Math.min(cells.length, 4); column += 1) {
+  for (const column of [2, 1, 3]) {
     if (syscallFromText(cells[column], 1)) continue;
     const value = numericCellExactOrNull(cells[column]);
     if (value != null) return value;
   }
   return 0;
+}
+
+function fixedSyscallDensityRaw(row) {
+  const cells = normalizeRow(row);
+  const preferred = [cells[2], cells[1]];
+  return preferred.find((cell) => numericCellExactOrNull(cell) != null);
 }
 
 function firstSyscallTopColumn(header) {
@@ -1426,7 +1432,9 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
 function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   for (const block of fixedHotspotBlocks) {
-    const candidates = hotspotCandidateStarts(block).map((firstThreadStart) => parseFixedHotspotBlockAt(rows, block, firstThreadStart));
+    const candidates = hotspotCandidateStarts(block).flatMap((firstThreadStart) =>
+      hotspotColumnLayouts().map((layout) => parseFixedHotspotBlockAt(rows, block, firstThreadStart, layout))
+    );
     const best = candidates.sort((a, b) => b.records.length - a.records.length)[0];
     if (debugMode) logHotspotCoordinateDebug(rows, block, candidates);
     if (!best?.records.length) continue;
@@ -1451,18 +1459,27 @@ function hotspotCandidateStarts(block) {
   return [...new Set([block.startRow, block.headerRow + 1, block.headerRow + 2, block.headerRow + 3])].sort((a, b) => a - b);
 }
 
-function parseFixedHotspotBlockAt(rows, block, firstThreadStart) {
+function hotspotColumnLayouts() {
+  return [
+    { name: "target", thread: [0, 1], so: [2, 4], fn: [5, 7] },
+    { name: "left1", thread: [0, 0], so: [1, 3], fn: [4, 6] },
+    { name: "right1", thread: [0, 2], so: [3, 5], fn: [6, 8] },
+    { name: "wide", thread: [0, 2], so: [2, 5], fn: [5, 8] },
+  ];
+}
+
+function parseFixedHotspotBlockAt(rows, block, firstThreadStart, layout) {
   const records = [];
   for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
     const threadStart = firstThreadStart + threadIndex * 9;
-    const parsedThread = firstHotspotThreadInRange(rows[threadStart], 0, 1);
+    const parsedThread = firstHotspotThreadInRange(rows[threadStart], layout.thread[0], layout.thread[1]);
     if (!parsedThread.name) continue;
     for (let soIndex = 0; soIndex < 3; soIndex += 1) {
       const soStart = threadStart + soIndex * 3;
-      const so = firstNamedPercentInRange(rows[soStart], 2, 4, "library");
+      const so = firstNamedPercentInRange(rows[soStart], layout.so[0], layout.so[1], "library");
       if (!so.name) continue;
       for (let functionIndex = 0; functionIndex < 3; functionIndex += 1) {
-        const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
+        const fn = firstNamedPercentInRange(rows[soStart + functionIndex], layout.fn[0], layout.fn[1], "function");
         if (!fn.name) continue;
         records.push({
           threadType: fixedTopdownThreadTypes[threadIndex] || "",
@@ -1476,7 +1493,7 @@ function parseFixedHotspotBlockAt(rows, block, firstThreadStart) {
       }
     }
   }
-  return { firstThreadStart, records };
+  return { firstThreadStart, layout, records };
 }
 
 function firstHotspotThreadInRange(row, startColumn, endColumn) {
@@ -1491,13 +1508,14 @@ function firstHotspotThreadInRange(row, startColumn, endColumn) {
 }
 
 function logHotspotCoordinateDebug(rows, block, candidates) {
-  const summary = candidates.map((candidate) => `row${candidate.firstThreadStart + 1}:${candidate.records.length}`).join(", ");
+  const summary = candidates.map((candidate) => `row${candidate.firstThreadStart + 1}/${candidate.layout.name}:${candidate.records.length}`).join(", ");
   console.warn(`[debug] hotspot ${block.dimension} candidates ${summary}`);
-  for (const candidate of candidates) {
+  for (const candidate of candidates.filter((item) => item.records.length || item.layout.name === "target")) {
     const sampleRows = [candidate.firstThreadStart, candidate.firstThreadStart + 1, candidate.firstThreadStart + 2, candidate.firstThreadStart + 3, candidate.firstThreadStart + 4]
-      .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 8).map(clean))}`)
+      .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 10).map(clean))}`)
       .join(" ");
-    console.warn(`[debug] hotspot ${block.dimension} candidate row${candidate.firstThreadStart + 1} ${sampleRows}`);
+    const first = candidate.records[0];
+    console.warn(`[debug] hotspot ${block.dimension} candidate row${candidate.firstThreadStart + 1}/${candidate.layout.name} soCols=${candidate.layout.so.join("-")} fnCols=${candidate.layout.fn.join("-")} records=${candidate.records.length} first=${first ? JSON.stringify({ so: first.soName, fn: first.functionName }) : "NA"} ${sampleRows}`);
   }
 }
 
