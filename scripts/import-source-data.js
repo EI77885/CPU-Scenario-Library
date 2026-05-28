@@ -625,6 +625,21 @@ function threadId(scenarioId, threadType) {
   return `${scenarioId}-${threadType}`;
 }
 
+async function dumpWorkbookXmlDebug(xlsxPath, scenarioId, workbook) {
+  const dir = path.dirname(xlsxPath);
+  const prefix = `${path.basename(xlsxPath, path.extname(xlsxPath))}.${safeFilePart(scenarioId)}.debug`;
+  for (const sheet of workbook.sheets) {
+    if (!sheet.xml) continue;
+    const outPath = path.join(dir, `${prefix}.${sheet.name}.xml`);
+    await fs.writeFile(outPath, sheet.xml, "utf8");
+    console.warn(`[debug] dumped ${sheet.name} xml: ${outPath}`);
+  }
+}
+
+function safeFilePart(value) {
+  return clean(value).replace(/[\\/:*?"<>|\s]+/gu, "_").slice(0, 120) || "scenario";
+}
+
 function inferThreadType(threadName, rank) {
   const value = clean(threadName).toLowerCase();
   if (value.includes("render") || value.includes("gfx") || value.includes("preview")) return "render";
@@ -661,6 +676,7 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   const base = baseObject(workbook, sourceInfo);
   const scenarioId = scenarioIdFromSource(sourceInfo, base);
   if (debugMode) console.warn(`[debug] scenario ${scenarioId}: ${JSON.stringify(base)}`);
+  if (debugMode) await dumpWorkbookXmlDebug(sourceInfo.xlsxPath, scenarioId, workbook);
   const hitraceDir = path.join(path.dirname(sourceInfo.xlsxPath), "hitrace");
   try {
     const stat = await fs.stat(hitraceDir);
