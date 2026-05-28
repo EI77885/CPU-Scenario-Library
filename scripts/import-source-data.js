@@ -193,6 +193,10 @@ function rowNumber(ref) {
 function parseSharedStrings(xlsxPath) {
   const xml = unzipText(xlsxPath, "xl/sharedStrings.xml", true);
   if (!xml) return [];
+  return parseSharedStringsXml(xml);
+}
+
+function parseSharedStringsXml(xml) {
   return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((match) =>
     [...match[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((part) => decodeXml(part[1])).join(""),
   );
@@ -301,7 +305,7 @@ function safeRows(rows) {
   return Array.isArray(rows) ? rows.map(normalizeRow) : [];
 }
 
-function logRawSheetRowsDebug(sheet, rowNumbers) {
+function logRawSheetRowsDebug(sheet, rowNumbers, sharedStrings = []) {
   if (!sheet?.xml) return;
   for (const rowNumberValue of rowNumbers) {
     const rowMatch = sheet.xml.match(new RegExp(`<row\\b[^>]*\\br="${rowNumberValue}"[^>]*>([\\s\\S]*?)<\\/row>`, "u"));
@@ -321,7 +325,8 @@ function logRawSheetRowsDebug(sheet, rowNumbers) {
       const text = inline
         ? [...inline.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((item) => decodeXml(item[1])).join("")
         : body.match(/<t[^>]*>([\s\S]*?)<\/t>/u)?.[1] || "";
-      return `${ref}{t=${type},s=${style},v=${JSON.stringify(decodeXml(value))},f=${JSON.stringify(decodeXml(formula))},tText=${JSON.stringify(decodeXml(text))}}`;
+      const sharedText = type === "s" && value !== "" ? sharedStrings[Number(value)] ?? "" : "";
+      return `${ref}{t=${type},s=${style},v=${JSON.stringify(decodeXml(value))},ss=${JSON.stringify(sharedText)},f=${JSON.stringify(decodeXml(formula))},tText=${JSON.stringify(decodeXml(text))}}`;
     });
     console.warn(`[debug] raw ${sheet.name} row${rowNumberValue}: ${cells.join(" | ") || "<no cells>"}`);
   }
@@ -343,7 +348,8 @@ function isBlankRow(row = []) {
 }
 
 function readWorkbook(xlsxPath) {
-  const sharedStrings = parseSharedStrings(xlsxPath);
+  const sharedStringsXml = unzipText(xlsxPath, "xl/sharedStrings.xml", true);
+  const sharedStrings = sharedStringsXml ? parseSharedStringsXml(sharedStringsXml) : [];
   const styles = parseStyles(xlsxPath);
   const entries = zipList(xlsxPath).filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/u.test(entry));
   const sheets = entries.map((entry, index) => {
@@ -356,6 +362,8 @@ function readWorkbook(xlsxPath) {
     };
   });
   return {
+    sharedStrings,
+    sharedStringsXml: debugMode ? sharedStringsXml : "",
     sheets,
     byRole: {
       base: sheets[0]?.rows || [],
@@ -628,6 +636,11 @@ function threadId(scenarioId, threadType) {
 async function dumpWorkbookXmlDebug(xlsxPath, scenarioId, workbook) {
   const dir = path.dirname(xlsxPath);
   const prefix = `${path.basename(xlsxPath, path.extname(xlsxPath))}.${safeFilePart(scenarioId)}.debug`;
+  if (workbook.sharedStringsXml) {
+    const outPath = path.join(dir, `${prefix}.sharedStrings.xml`);
+    await fs.writeFile(outPath, workbook.sharedStringsXml, "utf8");
+    console.warn(`[debug] dumped sharedStrings xml: ${outPath}`);
+  }
   for (const sheet of workbook.sheets) {
     if (!sheet.xml) continue;
     const outPath = path.join(dir, `${prefix}.${sheet.name}.xml`);
@@ -670,8 +683,12 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   if (debugMode) {
     console.warn(`[debug] reading ${sourceInfo.xlsxPath}`);
     console.warn(`[debug] sheets: ${workbook.sheets.map((sheet) => `${sheet.name}:${sheet.rows.length} rows`).join(", ") || "none"}`);
-    logRawSheetRowsDebug(workbook.sheets[0], [104, 105, 106]);
-    logRawSheetRowsDebug(workbook.sheets[0], [108, 109, 110, 111, 112, 113, 118, 121, 127, 136, 137, 138, 164, 165, 166]);
+    logRawSheetRowsDebug(workbook.sheets[0], [104, 105, 106], workbook.sharedStrings);
+    logRawSheetRowsDebug(
+      workbook.sheets[0],
+      [108, 109, 110, 111, 112, 113, 118, 121, 127, 136, 137, 138, 164, 165, 166],
+      workbook.sharedStrings,
+    );
   }
   const base = baseObject(workbook, sourceInfo);
   const scenarioId = scenarioIdFromSource(sourceInfo, base);
