@@ -235,7 +235,14 @@ function parseSheet(xml, sharedStrings = [], styles = { percentStyleIds: new Set
         ? [...inline[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((item) => decodeXml(item[1])).join("")
         : body.match(/<t[^>]*>([\s\S]*?)<\/t>/u)?.[1];
       const valueMatch = body.match(/<v>([\s\S]*?)<\/v>/u);
-      let raw = textMatch != null ? decodeXml(textMatch) : valueMatch ? decodeXml(valueMatch[1]) : "";
+      const formulaMatch = body.match(/<f\b[^>]*>([\s\S]*?)<\/f>/u);
+      let raw = textMatch != null
+        ? decodeXml(textMatch)
+        : valueMatch
+          ? decodeXml(valueMatch[1])
+          : formulaMatch
+            ? formulaValueFallback(decodeXml(formulaMatch[1]))
+            : "";
       if (shared && raw !== "") raw = sharedStrings[Number(raw)] ?? raw;
       row[index] = coerceCell(raw);
     }
@@ -243,6 +250,11 @@ function parseSheet(xml, sharedStrings = [], styles = { percentStyleIds: new Set
   }
   applyMergedCells(rows, xml);
   return normalizeRows(rows);
+}
+
+function formulaValueFallback(value) {
+  const text = clean(value).replace(/^=/u, "");
+  return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/iu.test(text) ? text : "";
 }
 
 function applyMergedCells(rows, xml) {
@@ -289,6 +301,43 @@ function safeRows(rows) {
   return Array.isArray(rows) ? rows.map(normalizeRow) : [];
 }
 
+function logRawSheetRowsDebug(sheet, rowNumbers) {
+  if (!sheet?.xml) return;
+  for (const rowNumberValue of rowNumbers) {
+    const rowMatch = sheet.xml.match(new RegExp(`<row\\b[^>]*\\br="${rowNumberValue}"[^>]*>([\\s\\S]*?)<\\/row>`, "u"));
+    if (!rowMatch) {
+      console.warn(`[debug] raw ${sheet.name} row${rowNumberValue}: <missing row>`);
+      continue;
+    }
+    const cells = [...rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gu)].map((match) => {
+      const attrs = match[1];
+      const body = match[2];
+      const ref = attrs.match(/\br="([^"]+)"/u)?.[1] || "?";
+      const type = attrs.match(/\bt="([^"]+)"/u)?.[1] || "";
+      const style = attrs.match(/\bs="([^"]+)"/u)?.[1] || "";
+      const value = body.match(/<v>([\s\S]*?)<\/v>/u)?.[1] || "";
+      const formula = body.match(/<f\b[^>]*>([\s\S]*?)<\/f>/u)?.[1] || "";
+      const inline = body.match(/<is\b[^>]*>([\s\S]*?)<\/is>/u)?.[1] || "";
+      const text = inline
+        ? [...inline.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((item) => decodeXml(item[1])).join("")
+        : body.match(/<t[^>]*>([\s\S]*?)<\/t>/u)?.[1] || "";
+      return `${ref}{t=${type},s=${style},v=${JSON.stringify(decodeXml(value))},f=${JSON.stringify(decodeXml(formula))},tText=${JSON.stringify(decodeXml(text))}}`;
+    });
+    console.warn(`[debug] raw ${sheet.name} row${rowNumberValue}: ${cells.join(" | ") || "<no cells>"}`);
+  }
+  const merges = [...sheet.xml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"[^>]*\/?>/gu)]
+    .map((match) => match[1])
+    .filter((ref) => rowNumbers.some((rowNumberValue) => mergeRefTouchesRow(ref, rowNumberValue)));
+  if (merges.length) console.warn(`[debug] raw ${sheet.name} merges near rows ${rowNumbers.join(",")}: ${merges.join(", ")}`);
+}
+
+function mergeRefTouchesRow(ref, rowNumberValue) {
+  const [start, end] = ref.split(":");
+  const startRow = rowNumber(start) + 1;
+  const endRow = rowNumber(end || start) + 1;
+  return rowNumberValue >= startRow && rowNumberValue <= endRow;
+}
+
 function isBlankRow(row = []) {
   return row.every((cell) => String(cell ?? "").trim() === "");
 }
@@ -297,11 +346,15 @@ function readWorkbook(xlsxPath) {
   const sharedStrings = parseSharedStrings(xlsxPath);
   const styles = parseStyles(xlsxPath);
   const entries = zipList(xlsxPath).filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/u.test(entry));
-  const sheets = entries.map((entry, index) => ({
-    name: `sheet${index + 1}`,
-    entry,
-    rows: parseSheet(unzipText(xlsxPath, entry), sharedStrings, styles),
-  }));
+  const sheets = entries.map((entry, index) => {
+    const xml = unzipText(xlsxPath, entry);
+    return {
+      name: `sheet${index + 1}`,
+      entry,
+      rows: parseSheet(xml, sharedStrings, styles),
+      xml: debugMode ? xml : "",
+    };
+  });
   return {
     sheets,
     byRole: {
@@ -602,6 +655,8 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   if (debugMode) {
     console.warn(`[debug] reading ${sourceInfo.xlsxPath}`);
     console.warn(`[debug] sheets: ${workbook.sheets.map((sheet) => `${sheet.name}:${sheet.rows.length} rows`).join(", ") || "none"}`);
+    logRawSheetRowsDebug(workbook.sheets[0], [104, 105, 106]);
+    logRawSheetRowsDebug(workbook.sheets[0], [108, 109, 110, 111, 112, 113, 118, 121, 127, 136, 137, 138, 164, 165, 166]);
   }
   const base = baseObject(workbook, sourceInfo);
   const scenarioId = scenarioIdFromSource(sourceInfo, base);
@@ -1227,6 +1282,9 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
 function logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density) {
   const refs = ["A", "B", "C", "D", "E", "F", "G", "H"].map((col, colIndex) => `${col}${rowIndex + 1}=${JSON.stringify(clean(normalizeRow(row)[colIndex]))}`);
   console.warn(`[debug] syscall row${rowIndex + 1} type=${fixedTopdownThreadTypes[index] || ""} name=${JSON.stringify(name)} rawC=${JSON.stringify(rawDensity)} density=${density} ${refs.join(" ")}`);
+  if (rawDensity === undefined || rawDensity === "") {
+    console.warn(`[debug] syscall row${rowIndex + 1} C${rowIndex + 1} is empty in xlsx XML; if Excel shows a value, save/recalculate the workbook or check whether the value is stored as an unsupported formula/cache.`);
+  }
 }
 
 function fixedSyscallDensity(row) {
@@ -1498,7 +1556,7 @@ function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
   if (firstLibraryColumn >= 0 && item.column <= firstLibraryColumn) return false;
   const parsed = parseNamedPercent(item.text);
   if (!parsed.name || !parsed.value) return false;
-  if (isLibraryCell(item.text) || looksLikeThreadName(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
+  if (looksLikeThreadName(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
   return true;
 }
 
