@@ -377,6 +377,14 @@ function numberFrom(value) {
   return match ? round2(Number(match[0])) : 0;
 }
 
+function hasPercentSign(value) {
+  return /[%％]/u.test(clean(value));
+}
+
+function hasWrappedPercent(value) {
+  return /[（(][^）)]*[%％][）)]/u.test(clean(value));
+}
+
 function round2(value) {
   const number = Number(value);
   return Number.isFinite(number) ? Number(number.toFixed(2)) : 0;
@@ -394,7 +402,7 @@ function percentFrom(value) {
 
 function syscallFromText(value, rank) {
   const text = clean(value);
-  const match = text.match(/^(?:(\d+(?:\.\d+)?)\s*[_\-\s:：]*)?([A-Za-z_][\w./-]*?)\s*(?:\(\s*([\d.]+)\s*%\s*\)|[\s,，:：]+([\d.]+)\s*%)$/u);
+  const match = text.match(/^(?:(\d+(?:\.\d+)?)\s*[_\-\s:：]*)?([A-Za-z_][\w./-]*?)\s*(?:[（(]\s*([\d.]+)\s*[%％]\s*[）)]|[\s,，:：]+([\d.]+)\s*[%％])$/u);
   if (!match) return null;
   return {
     rank,
@@ -816,7 +824,28 @@ function parseOneSheetHizee(rows, sections, parsed) {
       if (!parsed.hizee.scene.latency) parsed.hizee.scene.latency = numberAtOrNear(row, latencyCol, (num) => num > 0 && num < 10000);
     }
   }
+  applyHizeeCoordinateLayout(safe, clusterSeen, parsed);
   parsed.hizee.clusters = clusters.map((cluster) => clusterSeen.get(cluster) || { cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
+}
+
+function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
+  const layout = [
+    { cluster: "小核", rows: [26, 27, 28] },
+    { cluster: "中核", rows: [29, 30, 31] },
+    { cluster: "大核", rows: [32, 33, 34] },
+  ];
+  const hasTargetRunningCells = layout.some((item) => item.rows.some((rowIndex) => numericCellOrNull(rows[rowIndex]?.[2]) != null));
+  if (!hasTargetRunningCells) return;
+  for (const item of layout) {
+    if (!clusterSeen.has(item.cluster)) clusterSeen.set(item.cluster, { cluster: item.cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
+    const cluster = clusterSeen.get(item.cluster);
+    const [allProcess, uiProcess, renderService] = item.rows.map((rowIndex) => numericCellOrNull(rows[rowIndex]?.[2]));
+    if (allProcess != null) cluster.allProcess = boundedNumber(allProcess);
+    if (uiProcess != null) cluster.uiProcess = boundedNumber(uiProcess);
+    if (renderService != null) cluster.renderService = boundedNumber(renderService);
+  }
+  const fps = numericCellOrNull(rows[26]?.[3]);
+  if (fps != null && fps > 0 && fps <= 300) parsed.hizee.scene.fps = round2(fps);
 }
 
 function clusterFromRow(row) {
@@ -896,11 +925,19 @@ function hizeeLoadValueFromRow(row, loadCol, loadEndCol) {
   return firstLikelyPercentInRange(cells, 0, effectiveLoadEndCol);
 }
 
+function numericCellOrNull(value) {
+  if (typeof value === "number") return round2(value);
+  const text = clean(value);
+  if (!text) return null;
+  const match = text.replace(/,/gu, "").match(/-?\d+(?:\.\d+)?/u);
+  return match ? round2(Number(match[0])) : null;
+}
+
 function firstLikelyPercentInRange(cells, start, end) {
   for (let c = Math.max(0, start); c <= Math.min(cells.length - 1, end); c += 1) {
     const text = clean(cells[c]);
     const value = numberFrom(cells[c]);
-    if (value > 0 && value <= 100 && (/%/u.test(text) || value < 100)) return value;
+    if (value > 0 && value <= 100 && (hasPercentSign(text) || value < 100)) return value;
   }
   return 0;
 }
@@ -1096,7 +1133,7 @@ function syscallFromSplitCells(cells, index, rank) {
   const second = clean(cells[index + 1]);
   const third = clean(cells[index + 2]);
   if (!first) return null;
-  const hasPercent = /%/u.test(first) || /%/u.test(second) || /%/u.test(third);
+  const hasPercent = hasPercentSign(first) || hasPercentSign(second) || hasPercentSign(third);
   if (!hasPercent) return null;
   if (/^[A-Za-z_][\w./-]*$/u.test(first)) {
     return { consumed: 2, call: { rank, number: rank, name: first, share: round2(numberFrom(second)) } };
@@ -1127,7 +1164,7 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
     if (isHotspotDimensionRow(row, "fe")) dimension = "fe";
     if (isHotspotDimensionRow(row, "be")) dimension = "be";
     const indexed = normalizeRow(row).map((cell, column) => ({ cell, column, text: clean(cell) })).filter((item) => item.text);
-    const threadCell = indexed.find((item) => item.column <= 1 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && /\([^)]*%\)/u.test(item.text))
+    const threadCell = indexed.find((item) => item.column <= 1 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && hasWrappedPercent(item.text))
       || indexed.find((item) => item.column <= 1 && looksLikeThreadName(item.text));
     if (threadCell) {
       const parsedThread = parseNamedPercent(threadCell.text);
@@ -1318,7 +1355,7 @@ function isKnownInstruction(value) {
 }
 
 function parseNamedPercent(value) {
-  const match = clean(value).match(/^(.+?)\s*\(\s*([\d.]+)\s*%\s*\)$/u);
+  const match = clean(value).match(/^(.+?)\s*[（(]\s*([\d.]+)\s*[%％]\s*[）)]$/u);
   return match ? { name: match[1].trim(), value: numberFrom(match[2]) } : { name: clean(value), value: 0 };
 }
 

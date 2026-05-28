@@ -145,7 +145,7 @@ function buildLoadStacks(db, scenarioId, table, missingLabel) {
     const items = all(db, `SELECT name, value FROM ${table} WHERE scenario_id = ? AND cluster = ? ORDER BY rank`, [scenarioId, cluster]).map(roundValueRow);
     return {
       cluster,
-      items: items.length ? items : [{ name: `${missingLabel}（${cluster}）`, value: NA }],
+      items: items.length ? items : [{ name: `${missingLabel}(${cluster})`, value: NA }],
     };
   });
 }
@@ -235,7 +235,7 @@ function buildSyscall(db, thread) {
     threadType: thread.threadType,
     loadShare: threadLoadShare(thread),
     density: metric ? valueAtOrNA(metric.density) : NA,
-    calls: calls.length ? calls : [{ name: `未识别系统调用（${thread.name || "未知线程"}）`, value: NA }],
+    calls: calls.length ? calls : [{ name: `未识别系统调用(${thread.name || "未知线程"})`, value: NA }],
   };
 }
 
@@ -287,12 +287,12 @@ function missingHotspotSo(dimension, thread) {
 
 function missingHotspotFunction(dimension, thread, soName = "") {
   const soPart = soName ? ` / ${soName}` : "";
-  return { name: `未识别函数（${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"}${soPart}）`, value: NA };
+  return { name: `未识别函数(${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"}${soPart})`, value: NA };
 }
 
 function missingHotspotName(dimension, thread, kind) {
   const label = kind === "so" ? "未识别SO" : "未识别函数";
-  return `${label}（${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"}）`;
+  return `${label}(${hotspotDimensionLabel(dimension)} / ${thread.name || "未知线程"})`;
 }
 
 function hotspotDimensionLabel(dimension) {
