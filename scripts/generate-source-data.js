@@ -26,9 +26,9 @@ const topdownTotalRows = [
   ["IPC", "FE BOUND", "BE BOUND", "L1D_CACHE_REFILL", "L1D_TLB_REFILL_RD", "MEMSTALL_ANYSTORE"],
   ["MPKI", "STALL_FRONTEND_MEMBOUND", "STALL_BACKEND_MEMBOUND", "L1D_CACHE_REFILL_RD", "L1I_TLB_REFILL", "MEMSTALL_ANYLOAD"],
   ["BAD_INST_SPEC", "STALL_FRONTEND_L1I", "STALL_BACKEND_L1D", "L1I_CACHE_REFILL", "L2D_TLB_REFILL_RD", "MEMSTALL_L1MISS"],
-  ["BR_IMMED_MIS_PRED_RETIRED", "STALL_FRONTEND_MEM", "STALL_BACKEND_MEM", "L2D_CACHE_REFILL", "L2D_TLB_REFILL", "MEMSTALL_L2MISS"],
+  ["BR_IMMED_MIS_PRED_RETIRED", "STALL_FRONTEND_MEM", "STALL_BACKEND_MEM", "L2D_CACHE_REFILL", "L2I_TLB_REFILL", "MEMSTALL_L2MISS"],
   ["BR_COND_MID_PRED_RETIRED", "STALL_FRONTEND_TLB", "STALL_BACKEND_TLB", "L2D_CACHE_REFILL_RD", "PAGE_FAULTS_PMI", "MEMSTALL_L3MISS"],
-  ["BR_IND_MIS_PRED_RETIRED", "STALL_FRONTEND_CPUBOUND_PKI", "STALL_BACKEND_ST", "L2I_CACHE_REFILL", "L2D_CACHE_REFILL_PRFM", "L2I_TLB_REFILL"],
+  ["BR_IND_MIS_PRED_RETIRED", "STALL_FRONTEND_CPUBOUND_PKI", "STALL_BACKEND_ST", "L2I_CACHE_REFILL", "L2D_CACHE_REFILL_PRFM", ""],
   ["BR_INDNR_MIS_PRED_RETIRED", "STALL_FRONTEND_FLOW", "STALL_BACKEND_BUSY", "L3D_CACHE_REFILL", "L2D_CACHE_REFILL_HWPRF", ""],
   ["", "STALL_FRONTEND_FLUSH", "STALL_BACKEND_ILOCK", "L3D_CACHE_REFILL_RD", "L3D_CACHE_REFILL_PRFM", ""],
   ["", "STALL_FRONTEND_RENAME", "", "", "L3D_CACHE_REFILL_HWPRF", ""],
@@ -234,26 +234,24 @@ function targetSheetForScenario(scenario) {
   sheet.set(8, 7, "CLUSTER THREAD OVERVIEW");
 
   sheet.rangeStyle(8, 1, 25, 9, cellStyles.title);
-  sheet.row(26, ["", "负载", "", "平均帧率", "平均频率（Mhz）", "", "DDR平均频率（Mhz）", "平均带宽(GB/S)", "平均latency(ns)"]);
+  sheet.row(26, ["", "负载", "", "平均帧率", "平均频率（Mhz）", "DDR平均频率（Mhz）", "平均带宽(GB/S)", "平均latency(ns)"]);
   sheet.merge("B26:C26");
-  sheet.merge("E26:F26");
   sheet.rangeStyle(26, 1, 36, 12, cellStyles.normal);
   sheet.rangeStyle(26, 1, 26, 12, cellStyles.label);
   scenario.loadInfo.hizee.clusters.forEach((cluster, index) => {
     const row = 27 + index * 3;
     sheet.merge(`A${row}:A${row + 2}`);
     sheet.merge(`D${row}:D${row + 2}`);
-    sheet.merge(`E${row}:F${row + 2}`);
+    sheet.merge(`E${row}:E${row + 2}`);
+    sheet.merge(`F${row}:F${row + 2}`);
     sheet.merge(`G${row}:G${row + 2}`);
     sheet.merge(`H${row}:H${row + 2}`);
-    sheet.merge(`I${row}:I${row + 2}`);
     sheet.row(row, [
       `${cluster.cluster}cluster`,
       "所有进程",
       percentNumber(cluster.allProcessRunning),
       index === 0 ? scenario.loadInfo.hizee.scene.fps : "",
       cluster.avgFreqMhz,
-      "",
       index === 0 ? scenario.loadInfo.hizee.scene.ddrFreqMhz : "",
       index === 0 ? scenario.loadInfo.hizee.scene.bandwidth : "",
       index === 0 ? scenario.loadInfo.hizee.scene.latency : "",
@@ -292,8 +290,10 @@ function targetSheetForScenario(scenario) {
       const events = instructionEvents.slice(i, i + 2);
       sheet.row(row, [
         ...events.flatMap((event) => [event.toUpperCase() + "_PKI", threadRows.find((item) => item.scope === "total" && item.event === event)?.value ?? ""]),
-        "",
-        ...events.flatMap((event) => [event.toUpperCase() + "_PKI", threadRows.find((item) => item.scope === "kernel" && item.event === event)?.value ?? ""]),
+        events[0]?.toUpperCase() + "_PKI",
+        threadRows.find((item) => item.scope === "kernel" && item.event === events[0])?.value ?? "",
+        events[1]?.toUpperCase() + "_PKI",
+        threadRows.find((item) => item.scope === "kernel" && item.event === events[1])?.value ?? "",
       ]);
       sheet.rangeStyle(row, 1, row, 8, cellStyles.metric);
     }
@@ -332,15 +332,15 @@ function targetSheetForScenario(scenario) {
       for (const so of hotspot.sos) {
         const soStart = row;
         so.functions.forEach((fn, index) => {
-          if (index === 0) sheet.set(row, 4, `Library: ${so.name}(${so.value}%)`);
-          sheet.set(row, 7, `Function: ${fn.name}(${fn.value}%)`);
+          if (index === 0) sheet.set(row, 3, `Library: ${so.name}(${so.value}%)`);
+          sheet.set(row, 6, `Function: ${fn.name}(${fn.value}%)`);
           sheet.rangeStyle(row, 1, row, 8, cellStyles.normal);
           row += 1;
         });
-        sheet.merge(`D${soStart}:F${row - 1}`);
+        sheet.merge(`C${soStart}:E${row - 1}`);
       }
       sheet.set(threadStart, 1, `${thread.name}(${hotspot.score}%)`);
-      sheet.merge(`A${threadStart}:C${row - 1}`);
+      sheet.merge(`A${threadStart}:B${row - 1}`);
     }
   }
   return { rows: trimTrailingRows(rows), styles, merges, rowHeights: sheet.rowHeights, colWidths: sheet.colWidths };

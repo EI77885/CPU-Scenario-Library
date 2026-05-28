@@ -81,7 +81,6 @@ export const topdownNodes = [
   "L1D_TLB_REFILL_RD",
   "L1I_TLB_REFILL",
   "L2D_TLB_REFILL_RD",
-  "L2D_TLB_REFILL",
   "L2I_TLB_REFILL",
   "L2D_CACHE_REFILL_PRFM",
   "L2D_CACHE_REFILL_HWPRF",

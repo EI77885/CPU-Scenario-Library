@@ -25,6 +25,7 @@ const strictMode = args.strict;
 const debugMode = args.debug;
 
 const metricNameMap = new Map([...topdownLevel1, ...topdownNodes].map((name) => [normalizeMetricName(name), name]));
+const ignoredTopdownMetrics = new Set(["L2D_TLB_REFILL"].map(normalizeMetricName));
 const topdownAliases = {
   FE: "FE BOUND",
   FRONTEND: "FE BOUND",
@@ -91,6 +92,30 @@ for (const [alias, canonical] of Object.entries(topdownAliases)) {
 const instructionNameMap = new Map(instructionEvents.map((name) => [normalizeMetricName(name), name]));
 const threadOrder = ["main", "main", "render", "render", "other", "other"];
 const scopeOrder = ["total", "kernel", "total", "kernel", "total", "kernel"];
+const fixedTopdownBlockStarts = [37, 50, 63];
+const fixedTopdownThreadTypes = ["main", "render", "other"];
+const fixedInstructionBlockStarts = [78, 87, 95];
+const fixedSyscallRows = [104, 105, 106];
+const fixedHotspotBlocks = [
+  { dimension: "cycle", headerRow: 108, startRow: 109 },
+  { dimension: "fe", headerRow: 136, startRow: 137 },
+  { dimension: "be", headerRow: 164, startRow: 165 },
+];
+const fixedTopdownTotalRows = [
+  ["IPC", "FE BOUND", "BE BOUND", "L1D_CACHE_REFILL", "L1D_TLB_REFILL_RD", "MEMSTALL_ANYSTORE"],
+  ["MPKI", "STALL_FRONTEND_MEMBOUND", "STALL_BACKEND_MEMBOUND", "L1D_CACHE_REFILL_RD", "L1I_TLB_REFILL", "MEMSTALL_ANYLOAD"],
+  ["BAD_INST_SPEC", "STALL_FRONTEND_L1I", "STALL_BACKEND_L1D", "L1I_CACHE_REFILL", "L2D_TLB_REFILL_RD", "MEMSTALL_L1MISS"],
+  ["BR_IMMED_MIS_PRED_RETIRED", "STALL_FRONTEND_MEM", "STALL_BACKEND_MEM", "L2D_CACHE_REFILL", "L2I_TLB_REFILL", "MEMSTALL_L2MISS"],
+  ["BR_COND_MID_PRED_RETIRED", "STALL_FRONTEND_TLB", "STALL_BACKEND_TLB", "L2D_CACHE_REFILL_RD", "PAGE_FAULTS_PMI", "MEMSTALL_L3MISS"],
+  ["BR_IND_MIS_PRED_RETIRED", "STALL_FRONTEND_CPUBOUND_PKI", "STALL_BACKEND_ST", "L2I_CACHE_REFILL", "L2D_CACHE_REFILL_PRFM", ""],
+  ["BR_INDNR_MIS_PRED_RETIRED", "STALL_FRONTEND_FLOW", "STALL_BACKEND_BUSY", "L3D_CACHE_REFILL", "L2D_CACHE_REFILL_HWPRF", ""],
+  ["", "STALL_FRONTEND_FLUSH", "STALL_BACKEND_ILOCK", "L3D_CACHE_REFILL_RD", "L3D_CACHE_REFILL_PRFM", ""],
+  ["", "STALL_FRONTEND_RENAME", "", "", "L3D_CACHE_REFILL_HWPRF", ""],
+];
+const fixedTopdownKernelRows = [
+  ["IPC", "INST_ratio", "FE BOUND", "MPKI", "L2D_CACHE_REFILL", ""],
+  ["", "CYCLE_ratio", "BE BOUND", "BAD_INST_SPEC", "L2D_CACHE_REFILL_RD", ""],
+];
 
 function usage() {
   console.log(`Usage:
@@ -694,6 +719,7 @@ function parseSixSheetTopdown(rows, parsed, scenarioId) {
   for (const row of rows.slice(1)) {
     const [threadName, threadType, sourceScope, level, rawMetric, parent, value] = row;
     if (!threadName || value === "") continue;
+    if (isIgnoredTopdownMetric(rawMetric)) continue;
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
     parsed.topdown.push({
       threadId: thread.id,
@@ -990,6 +1016,8 @@ function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
   const start = sections.topdown ?? safe.findIndex((row) => row.some((cell) => isKnownTopdown(cell)));
   const end = firstSectionAfter(sections, start, ["instructions", "syscalls", "hotspots"]) ?? safe.length;
   if (start < 0) return;
+  const fixedCount = parseFixedTopdownCoordinates(safe, parsed, scenarioId);
+  if (fixedCount) return;
   let block = -1;
   let currentThread = null;
   let columnHeaders = [];
@@ -1022,7 +1050,9 @@ function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
       currentThread.currentScope = scope;
     }
     const pairs = metricPairsDetailed(row, isKnownTopdown);
-    for (const candidate of unresolvedMetricCandidates(row, isKnownTopdown)) unresolved.add(candidate);
+    for (const candidate of unresolvedMetricCandidates(row, isKnownTopdown)) {
+      if (!isIgnoredTopdownMetric(candidate)) unresolved.add(candidate);
+    }
     if (!pairs.length) continue;
     for (const pair of pairs) {
       const header = columnHeaders.length ? headerForColumn(columnHeaders, pair.column) : null;
@@ -1044,10 +1074,50 @@ function parseOneSheetTopdown(rows, sections, parsed, scenarioId, warnings) {
   }
 }
 
+function parseFixedTopdownCoordinates(rows, parsed, scenarioId) {
+  let count = 0;
+  fixedTopdownBlockStarts.forEach((blockStart, blockIndex) => {
+    const headerText = rowText(rows[blockStart]);
+    if (!/线程.*(all|kernel)|thread/iu.test(headerText)) return;
+    const threadName = fixedTopdownThreadName(rows[blockStart], blockIndex);
+    const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
+    const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
+    count += parseFixedTopdownRows(rows, blockStart + 1, fixedTopdownTotalRows, thread, "total", parsed);
+    count += parseFixedTopdownRows(rows, blockStart + 11, fixedTopdownKernelRows, thread, "kernel", parsed);
+  });
+  return count;
+}
+
+function parseFixedTopdownRows(rows, startRow, metricRows, thread, scope, parsed) {
+  let count = 0;
+  metricRows.forEach((metrics, rowOffset) => {
+    metrics.forEach((metric, pairIndex) => {
+      if (!metric || isIgnoredTopdownMetric(metric) || !isKnownTopdown(metric)) return;
+      const value = numericCellOrNull(rows[startRow + rowOffset]?.[pairIndex * 2 + 1]);
+      if (value == null) return;
+      const parent = topdownParent(metric);
+      parsed.topdown.push({ threadId: thread.id, scope, level: topdownLevel(metric, parent), metric, parent, value });
+      count += 1;
+    });
+  });
+  return count;
+}
+
+function fixedTopdownThreadName(row, blockIndex) {
+  return fixedSectionThreadName(row, fixedTopdownThreadTypes[blockIndex] || "main");
+}
+
+function fixedSectionThreadName(row, fallbackType) {
+  const raw = normalizeRow(row).map(clean).find(Boolean) || `${fallbackType}_thread`;
+  return raw.replace(/线程\s*[-_ ]*(all|kernel|总体|内核).*$/iu, "").replace(/[-_ ]*(all|kernel|总体|内核).*$/iu, "").trim() || raw;
+}
+
 function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
   const safe = safeRows(rows);
   const start = sections.instructions ?? safe.findIndex((row) => row.some((cell) => isKnownInstruction(cell)));
   if (start < 0) return;
+  const fixedCount = parseFixedInstructionCoordinates(safe, parsed, scenarioId);
+  if (fixedCount) return;
   const end = firstSectionAfter(sections, start, ["syscalls", "hotspots"]) ?? safe.length;
   let currentThread = null;
   for (const row of safe.slice(start, end)) {
@@ -1068,10 +1138,41 @@ function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
   }
 }
 
+function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
+  let count = 0;
+  fixedInstructionBlockStarts.forEach((blockStart, blockIndex) => {
+    const headerText = rowText(rows[blockStart]);
+    if (!/线程|thread/iu.test(headerText)) return;
+    const threadName = fixedSectionThreadName(rows[blockStart], fixedTopdownThreadTypes[blockIndex] || "main");
+    const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
+    const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
+    for (let index = 0; index < instructionEvents.length; index += 2) {
+      const rowIndex = blockStart + 2 + index / 2;
+      const firstEvent = instructionEvents[index];
+      const secondEvent = instructionEvents[index + 1];
+      count += addFixedInstruction(parsed, thread, "total", firstEvent, rows[rowIndex]?.[1]);
+      count += addFixedInstruction(parsed, thread, "total", secondEvent, rows[rowIndex]?.[3]);
+      count += addFixedInstruction(parsed, thread, "kernel", firstEvent, rows[rowIndex]?.[5]);
+      count += addFixedInstruction(parsed, thread, "kernel", secondEvent, rows[rowIndex]?.[7]);
+    }
+  });
+  return count;
+}
+
+function addFixedInstruction(parsed, thread, scope, event, rawValue) {
+  if (!event) return 0;
+  const value = numericCellOrNull(rawValue);
+  if (value == null) return 0;
+  parsed.instructions.push({ threadId: thread.id, scope, event, value });
+  return 1;
+}
+
 function parseOneSheetSyscalls(rows, sections, parsed, scenarioId) {
   const safe = safeRows(rows);
   const start = sections.syscalls ?? safe.findIndex((row) => row.some((cell) => includesText(cell, "系统调用密度")));
   if (start < 0) return;
+  const fixedCount = parseFixedSyscallCoordinates(safe, parsed, scenarioId);
+  if (fixedCount) return;
   const end = firstSectionAfter(sections, start, ["hotspots"]) ?? safe.length;
   const header = safe.slice(start, Math.min(end, start + 3)).find((row) => row.some((cell) => /线程|thread/iu.test(clean(cell))) && row.some((cell) => /密度|density/iu.test(clean(cell)))) || [];
   const threadCol = header.findIndex((cell) => /线程|thread/iu.test(clean(cell)));
@@ -1087,6 +1188,21 @@ function parseOneSheetSyscalls(rows, sections, parsed, scenarioId) {
     const density = syscallDensity(row, densityCol, threadCol, topCol);
     parsed.syscalls.push({ threadId: thread.id, density, calls });
   }
+}
+
+function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
+  let count = 0;
+  fixedSyscallRows.forEach((rowIndex, index) => {
+    const row = rows[rowIndex];
+    const name = fixedSectionThreadName(row, fixedTopdownThreadTypes[index] || "main");
+    if (!name || !/线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(rowText(row))) return;
+    const calls = parseSyscallRowCalls(normalizeRow(row).slice(3, 8), 0);
+    if (!calls.length) return;
+    const thread = ensureThread(parsed.threads, scenarioId, name, fixedTopdownThreadTypes[index] || inferThreadType(name, index));
+    parsed.syscalls.push({ threadId: thread.id, density: numberFrom(row?.[2]), calls });
+    count += 1;
+  });
+  return count;
 }
 
 function firstSyscallTopColumn(header) {
@@ -1171,6 +1287,8 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
   const safe = safeRows(rows);
   const start = sections.hotspots ?? safe.findIndex((row) => row.some((cell) => isLibraryCell(cell) || isFunctionCell(cell)));
   if (start < 0) return;
+  const fixedCount = parseFixedHotspotCoordinates(safe, parsed, scenarioId);
+  if (fixedCount) return;
   let dimension = "cycle";
   let currentThread = null;
   let currentSo = null;
@@ -1209,6 +1327,60 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
       }
     }
   }
+}
+
+function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
+  let count = 0;
+  for (const block of fixedHotspotBlocks) {
+    if (!isHotspotDimensionRow(rows[block.headerRow] || [], block.dimension)) continue;
+    for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
+      const threadStart = block.startRow + threadIndex * 9;
+      const parsedThread = firstNamedPercentInRange(rows[threadStart], 0, 1);
+      if (!parsedThread.name) continue;
+      const thread = ensureThread(parsed.threads, scenarioId, parsedThread.name, fixedTopdownThreadTypes[threadIndex] || "", parsedThread.value);
+      for (let soIndex = 0; soIndex < 3; soIndex += 1) {
+        const soStart = threadStart + soIndex * 3;
+        const so = firstNamedPercentInRange(rows[soStart], 2, 4, "library");
+        if (!so.name) continue;
+        for (let functionIndex = 0; functionIndex < 3; functionIndex += 1) {
+          const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
+          if (!fn.name) continue;
+          parsed.hotspots.push({
+            dimension: block.dimension,
+            threadId: thread.id,
+            threadScore: parsedThread.value,
+            soName: so.name,
+            soValue: so.value,
+            functionName: fn.name,
+            functionValue: fn.value,
+          });
+          count += 1;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
+  const cells = normalizeRow(row);
+  const candidates = [];
+  for (let column = startColumn; column <= endColumn; column += 1) {
+    const text = clean(cells[column]);
+    if (!text) continue;
+    candidates.push(text);
+  }
+  const prioritized = kind === "library"
+    ? [...candidates.filter((text) => isLibraryCell(text)), ...candidates.filter((text) => !isLibraryCell(text) && !looksLikeThreadName(text))]
+    : kind === "function"
+      ? [...candidates.filter((text) => isFunctionCell(text)), ...candidates.filter((text) => !isFunctionCell(text) && !isLibraryCell(text) && !looksLikeThreadName(text))]
+      : candidates;
+  for (const text of prioritized) {
+    const source = kind ? stripHotspotPrefix(text, kind) : text;
+    const parsed = parseNamedPercent(source);
+    if (parsed.name) return parsed;
+  }
+  return { name: "", value: 0 };
 }
 
 function isHotspotDimensionRow(row, dimension) {
@@ -1363,6 +1535,10 @@ function topdownLevel(metric, parent = topdownParent(metric)) {
 
 function isKnownTopdown(value) {
   return metricNameMap.has(normalizeMetricName(value));
+}
+
+function isIgnoredTopdownMetric(value) {
+  return ignoredTopdownMetrics.has(normalizeMetricName(value));
 }
 
 function isKnownInstruction(value) {
