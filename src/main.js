@@ -88,7 +88,12 @@ function toFiniteNumber(value) {
 
 function displayValue(value, suffix = "") {
   const number = toFiniteNumber(value);
-  return number == null ? "NA" : `${roundTwo(number).toFixed(2)}${suffix}`;
+  if (number == null) return "NA";
+  const abs = Math.abs(number);
+  const text = abs > 0 && abs < 0.01
+    ? number.toFixed(6).replace(/\.?0+$/u, "")
+    : roundTwo(number).toFixed(2);
+  return `${text}${suffix}`;
 }
 
 function displayText(value) {

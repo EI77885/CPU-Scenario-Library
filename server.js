@@ -160,6 +160,11 @@ function valueAtOrNA(value) {
   return Number.isFinite(number) ? Number(number.toFixed(2)) : NA;
 }
 
+function preciseValueAtOrNA(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NA;
+}
+
 function valueOrNA(row, key) {
   return row && Object.hasOwn(row, key) ? valueAtOrNA(row[key]) : NA;
 }
@@ -216,7 +221,7 @@ function buildInstruction(db, thread) {
   const rows = all(db, "SELECT * FROM instruction_metrics WHERE thread_id = ?", [thread.id]);
   const valueFor = (scope, event) => {
     const row = rows.find((item) => item.scope === scope && item.event === event);
-    return row ? valueAtOrNA(row.value) : NA;
+    return row ? preciseValueAtOrNA(row.value) : NA;
   };
   return {
     name: thread.name,

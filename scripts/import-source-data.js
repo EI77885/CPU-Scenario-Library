@@ -237,11 +237,6 @@ function parseSheet(xml, sharedStrings = [], styles = { percentStyleIds: new Set
       const valueMatch = body.match(/<v>([\s\S]*?)<\/v>/u);
       let raw = textMatch != null ? decodeXml(textMatch) : valueMatch ? decodeXml(valueMatch[1]) : "";
       if (shared && raw !== "") raw = sharedStrings[Number(raw)] ?? raw;
-      const styleId = Number(attrs.match(/\bs="(\d+)"/u)?.[1] || 0);
-      if (!shared && textMatch == null && raw !== "" && styles.percentStyleIds.has(styleId)) {
-        const numeric = Number(raw);
-        if (Number.isFinite(numeric)) raw = String(numeric * 100);
-      }
       row[index] = coerceCell(raw);
     }
     rows[rowIndex] = row;
@@ -406,7 +401,7 @@ function canonicalInstructionName(value) {
 
 function numberFrom(value) {
   if (typeof value === "number") return round2(value);
-  const match = clean(value).replace(/,/gu, "").match(/-?\d+(?:\.\d+)?/u);
+  const match = clean(value).replace(/,/gu, "").match(/-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?/iu);
   return match ? round2(Number(match[0])) : 0;
 }
 
@@ -873,7 +868,7 @@ function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
   for (const item of layout) {
     if (!clusterSeen.has(item.cluster)) clusterSeen.set(item.cluster, { cluster: item.cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
     const cluster = clusterSeen.get(item.cluster);
-    const [allProcess, uiProcess, renderService] = item.rows.map((rowIndex) => numericCellOrNull(rows[rowIndex]?.[2]));
+    const [allProcess, uiProcess, renderService] = item.rows.map((rowIndex) => percentCellOrNull(rows[rowIndex]?.[2]));
     if (allProcess != null) cluster.allProcess = boundedNumber(allProcess);
     if (uiProcess != null) cluster.uiProcess = boundedNumber(uiProcess);
     if (renderService != null) cluster.renderService = boundedNumber(renderService);
@@ -959,7 +954,7 @@ function processLoadFromRow(row, loadCol, loadEndCol, labelPattern) {
     if (afterLabel) return afterLabel;
   }
   if (loadCol >= 0) {
-    const direct = numberFrom(cells[loadCol]);
+    const direct = percentCellOrNull(cells[loadCol]);
     if (direct > 0 && direct <= 100) return direct;
     const nearby = firstLikelyPercentInRange(cells, loadCol, Math.min(effectiveLoadEndCol, loadCol + 2));
     if (nearby) return nearby;
@@ -982,10 +977,25 @@ function numericCellOrNull(value) {
   return match ? round2(Number(match[0])) : null;
 }
 
+function numericCellExactOrNull(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const text = clean(value);
+  if (!text) return null;
+  const match = text.replace(/,/gu, "").match(/-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?/iu);
+  return match ? Number(match[0]) : null;
+}
+
+function percentCellOrNull(value) {
+  const number = numericCellExactOrNull(value);
+  if (number == null) return null;
+  if (typeof value === "number" && number > 0 && number <= 1) return round2(number * 100);
+  return round2(number);
+}
+
 function firstLikelyPercentInRange(cells, start, end) {
   for (let c = Math.max(0, start); c <= Math.min(cells.length - 1, end); c += 1) {
     const text = clean(cells[c]);
-    const value = numberFrom(cells[c]);
+    const value = percentCellOrNull(cells[c]) ?? 0;
     if (value > 0 && value <= 100 && (hasPercentSign(text) || value < 100)) return value;
   }
   return 0;
@@ -1149,7 +1159,7 @@ function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
 function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   fixedInstructionDataStarts.forEach((dataStart, blockIndex) => {
-    const headerRow = dataStart - 1;
+    const headerRow = dataStart - 2;
     const threadName = fixedSectionThreadName(rows[headerRow], fixedTopdownThreadTypes[blockIndex] || "main");
     const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
@@ -1166,7 +1176,7 @@ function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
 
 function addFixedInstruction(parsed, thread, scope, event, rawValue) {
   if (!event) return 0;
-  const value = numericCellOrNull(rawValue);
+  const value = numericCellExactOrNull(rawValue);
   if (value == null) return 0;
   parsed.instructions.push({ threadId: thread.id, scope, event, value });
   return 1;
@@ -1204,10 +1214,22 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
     const calls = parseSyscallRowCalls(normalizeRow(row).slice(3, 8), 0);
     if (!calls.length) return;
     const thread = ensureThread(parsed.threads, scenarioId, name, fixedTopdownThreadTypes[index] || inferThreadType(name, index));
-    parsed.syscalls.push({ threadId: thread.id, density: numberFrom(row?.[2]), calls });
+    parsed.syscalls.push({ threadId: thread.id, density: fixedSyscallDensity(row), calls });
     count += 1;
   });
   return count;
+}
+
+function fixedSyscallDensity(row) {
+  const direct = numericCellExactOrNull(row?.[2]);
+  if (direct != null) return direct;
+  const cells = normalizeRow(row);
+  for (let column = 2; column < Math.min(cells.length, 4); column += 1) {
+    if (syscallFromText(cells[column], 1)) continue;
+    const value = numericCellExactOrNull(cells[column]);
+    if (value != null) return value;
+  }
+  return 0;
 }
 
 function firstSyscallTopColumn(header) {
@@ -1337,33 +1359,79 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
 function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   for (const block of fixedHotspotBlocks) {
-    for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
-      const threadStart = block.startRow + threadIndex * 9;
-      const parsedThread = firstNamedPercentInRange(rows[threadStart], 0, 1);
-      if (!parsedThread.name) continue;
-      const thread = ensureThread(parsed.threads, scenarioId, parsedThread.name, fixedTopdownThreadTypes[threadIndex] || "", parsedThread.value);
-      for (let soIndex = 0; soIndex < 3; soIndex += 1) {
-        const soStart = threadStart + soIndex * 3;
-        const so = firstNamedPercentInRange(rows[soStart], 2, 4, "library");
-        if (!so.name) continue;
-        for (let functionIndex = 0; functionIndex < 3; functionIndex += 1) {
-          const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
-          if (!fn.name) continue;
-          parsed.hotspots.push({
-            dimension: block.dimension,
-            threadId: thread.id,
-            threadScore: parsedThread.value,
-            soName: so.name,
-            soValue: so.value,
-            functionName: fn.name,
-            functionValue: fn.value,
-          });
-          count += 1;
-        }
-      }
+    const candidates = hotspotCandidateStarts(block).map((firstThreadStart) => parseFixedHotspotBlockAt(rows, block, firstThreadStart));
+    const best = candidates.sort((a, b) => b.records.length - a.records.length)[0];
+    if (debugMode) logHotspotCoordinateDebug(rows, block, candidates);
+    if (!best?.records.length) continue;
+    for (const record of best.records) {
+      const thread = ensureThread(parsed.threads, scenarioId, record.threadName, record.threadType, record.threadScore);
+      parsed.hotspots.push({
+        dimension: block.dimension,
+        threadId: thread.id,
+        threadScore: record.threadScore,
+        soName: record.soName,
+        soValue: record.soValue,
+        functionName: record.functionName,
+        functionValue: record.functionValue,
+      });
+      count += 1;
     }
   }
   return count;
+}
+
+function hotspotCandidateStarts(block) {
+  return [...new Set([block.startRow, block.headerRow + 1, block.headerRow + 2, block.headerRow + 3])].sort((a, b) => a - b);
+}
+
+function parseFixedHotspotBlockAt(rows, block, firstThreadStart) {
+  const records = [];
+  for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
+    const threadStart = firstThreadStart + threadIndex * 9;
+    const parsedThread = firstHotspotThreadInRange(rows[threadStart], 0, 1);
+    if (!parsedThread.name) continue;
+    for (let soIndex = 0; soIndex < 3; soIndex += 1) {
+      const soStart = threadStart + soIndex * 3;
+      const so = firstNamedPercentInRange(rows[soStart], 2, 4, "library");
+      if (!so.name) continue;
+      for (let functionIndex = 0; functionIndex < 3; functionIndex += 1) {
+        const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
+        if (!fn.name) continue;
+        records.push({
+          threadType: fixedTopdownThreadTypes[threadIndex] || "",
+          threadName: parsedThread.name,
+          threadScore: parsedThread.value,
+          soName: so.name,
+          soValue: so.value,
+          functionName: fn.name,
+          functionValue: fn.value,
+        });
+      }
+    }
+  }
+  return { firstThreadStart, records };
+}
+
+function firstHotspotThreadInRange(row, startColumn, endColumn) {
+  const cells = normalizeRow(row);
+  for (let column = startColumn; column <= endColumn; column += 1) {
+    const text = clean(cells[column]);
+    if (!text || isLibraryCell(text) || isFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) continue;
+    const parsed = parseNamedPercent(text);
+    if ((parsed.name && hasWrappedPercent(text)) || looksLikeThreadName(text)) return parsed;
+  }
+  return { name: "", value: 0 };
+}
+
+function logHotspotCoordinateDebug(rows, block, candidates) {
+  const summary = candidates.map((candidate) => `row${candidate.firstThreadStart + 1}:${candidate.records.length}`).join(", ");
+  console.warn(`[debug] hotspot ${block.dimension} candidates ${summary}`);
+  for (const candidate of candidates) {
+    const sampleRows = [candidate.firstThreadStart, candidate.firstThreadStart + 1, candidate.firstThreadStart + 2]
+      .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 8).map(clean))}`)
+      .join(" ");
+    console.warn(`[debug] hotspot ${block.dimension} candidate row${candidate.firstThreadStart + 1} ${sampleRows}`);
+  }
 }
 
 function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
@@ -1623,7 +1691,7 @@ function importSyscallRows(statements, syscalls) {
     byThread.set(row.threadId, row);
   }
   for (const row of byThread.values()) {
-    statements.syscallMetric.run(row.threadId, round2(row.density));
+    statements.syscallMetric.run(row.threadId, numericCellExactOrNull(row.density) ?? 0);
     for (const call of row.calls) {
       statements.syscallTop.run(row.threadId, call.rank, call.number, call.name, round2(call.share));
     }

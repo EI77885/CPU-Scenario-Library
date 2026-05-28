@@ -282,16 +282,20 @@ function targetSheetForScenario(scenario) {
   sheet.merge("A78:L78");
   sheet.set(78, 1, "4. 指令分布");
   sheet.rangeStyle(78, 1, 78, 12, cellStyles.section);
-  const instructionStarts = [79, 87, 95];
+  const instructionStarts = [78, 86, 94];
   scenario.threads.forEach((thread, threadIndex) => {
     const start = instructionStarts[threadIndex];
     const threadRows = scenario.instructions.filter((row) => row.threadId === thread.id);
+    sheet.merge(`A${start}:L${start}`);
     sheet.set(start, 1, `${thread.name}线程`);
-    sheet.set(start, 2, "ALL");
-    sheet.set(start, 5, "Kernel");
-    sheet.rangeStyle(start, 1, start, 8, cellStyles.label);
+    sheet.rangeStyle(start, 1, start, 12, cellStyles.section);
+    sheet.merge(`A${start + 1}:D${start + 1}`);
+    sheet.merge(`E${start + 1}:H${start + 1}`);
+    sheet.set(start + 1, 1, "ALL");
+    sheet.set(start + 1, 5, "Kernel");
+    sheet.rangeStyle(start + 1, 1, start + 1, 8, cellStyles.label);
     instructionRows.forEach((events, rowIndex) => {
-      const row = start + 1 + rowIndex;
+      const row = start + 2 + rowIndex;
       sheet.row(row, [
         events[0] ? events[0].toUpperCase() + "_PKI" : "",
         events[0] ? threadRows.find((item) => item.scope === "total" && item.event === events[0])?.value ?? "" : "",
