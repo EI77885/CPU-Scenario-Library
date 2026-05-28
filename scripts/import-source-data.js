@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import ExcelJS from "exceljs";
+import Worksheet from "exceljs/lib/doc/worksheet.js";
 import {
   categoryDirs,
   clusters,
@@ -23,6 +24,8 @@ const dataDir = path.dirname(dbPath);
 const resetMode = args.reset;
 const strictMode = args.strict;
 const debugMode = args.debug;
+
+patchExcelJsMergeHandling();
 
 const metricNameMap = new Map([...topdownLevel1, ...topdownNodes].map((name) => [normalizeMetricName(name), name]));
 const ignoredTopdownMetrics = new Set(["L2D_TLB_REFILL"].map(normalizeMetricName));
@@ -125,6 +128,23 @@ const fixedTopdownKernelRows = [
   ["", "CYCLE_ratio", "BE BOUND", "BAD_INST_SPEC", "L2D_CACHE_REFILL_RD", ""],
 ];
 
+function patchExcelJsMergeHandling() {
+  const originalMerge = Worksheet.prototype._mergeCellsInternal;
+  if (originalMerge.__cpuScenarioPatched) return;
+  Worksheet.prototype._mergeCellsInternal = function patchedMergeCellsInternal(dimensions, ignoreStyle) {
+    try {
+      return originalMerge.call(this, dimensions, ignoreStyle);
+    } catch (error) {
+      if (error?.message === "Cannot merge already merged cells") {
+        if (debugMode) console.warn(`[debug] skipped overlapping merge ${dimensions?.range || ""}`);
+        return undefined;
+      }
+      throw error;
+    }
+  };
+  Worksheet.prototype._mergeCellsInternal.__cpuScenarioPatched = true;
+}
+
 function usage() {
   console.log(`Usage:
   node scripts/import-source-data.js [--source <source_data>] [--db <path>] [--reset|--full] [--strict]
@@ -159,125 +179,24 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function unzipText(xlsxPath, entry, optional = false) {
-  try {
-    return execFileSync("unzip", ["-p", xlsxPath, entry], { encoding: "utf8", stdio: ["ignore", "pipe", optional ? "ignore" : "pipe"] });
-  } catch (error) {
-    if (optional) return "";
-    throw error;
-  }
-}
-
-function zipList(xlsxPath) {
-  return execFileSync("unzip", ["-Z1", xlsxPath], { encoding: "utf8" }).split(/\r?\n/u).filter(Boolean);
-}
-
-function decodeXml(value) {
-  return String(value || "")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&amp;", "&");
-}
-
 function columnIndex(ref) {
   const letters = ref.match(/[A-Z]+/u)?.[0] || "A";
   return [...letters].reduce((sum, char) => sum * 26 + char.charCodeAt(0) - 64, 0) - 1;
 }
 
+function columnLabel(index) {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label || "A";
+}
+
 function rowNumber(ref) {
   return Number(ref.match(/\d+/u)?.[0] || 1) - 1;
-}
-
-function parseSharedStrings(xlsxPath) {
-  const xml = unzipText(xlsxPath, "xl/sharedStrings.xml", true);
-  if (!xml) return [];
-  return parseSharedStringsXml(xml);
-}
-
-function parseSharedStringsXml(xml) {
-  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((match) =>
-    [...match[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((part) => decodeXml(part[1])).join(""),
-  );
-}
-
-function parseStyles(xlsxPath) {
-  const xml = unzipText(xlsxPath, "xl/styles.xml", true);
-  if (!xml) return { percentStyleIds: new Set() };
-  const customPercentFormats = new Set(
-    [...xml.matchAll(/<numFmt\b([^>]*)\/?>/gu)]
-      .filter((match) => decodeXml(match[1]).includes("%"))
-      .map((match) => Number(match[1].match(/\bnumFmtId="(\d+)"/u)?.[1]))
-      .filter(Number.isFinite),
-  );
-  const builtInPercentFormats = new Set([9, 10]);
-  const percentStyleIds = new Set();
-  const cellXfs = xml.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/u)?.[1] || "";
-  let styleIndex = 0;
-  for (const match of cellXfs.matchAll(/<xf\b([^>]*)\/?>/gu)) {
-    const numFmtId = Number(match[1].match(/\bnumFmtId="(\d+)"/u)?.[1] || 0);
-    if (builtInPercentFormats.has(numFmtId) || customPercentFormats.has(numFmtId)) percentStyleIds.add(styleIndex);
-    styleIndex += 1;
-  }
-  return { percentStyleIds };
-}
-
-function parseSheet(xml, sharedStrings = [], styles = { percentStyleIds: new Set() }) {
-  const rows = [];
-  for (const rowMatch of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/gu)) {
-    const rowIndex = Number(rowMatch[1]) - 1;
-    const row = rows[rowIndex] || [];
-    for (const cellMatch of rowMatch[2].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gu)) {
-      const attrs = cellMatch[1];
-      const body = cellMatch[2];
-      const ref = attrs.match(/\br="([^"]+)"/u)?.[1] || `A${rowIndex + 1}`;
-      const index = columnIndex(ref);
-      const shared = /\bt="s"/u.test(attrs);
-      const inline = body.match(/<is\b[^>]*>([\s\S]*?)<\/is>/u);
-      const textMatch = inline
-        ? [...inline[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((item) => decodeXml(item[1])).join("")
-        : body.match(/<t[^>]*>([\s\S]*?)<\/t>/u)?.[1];
-      const valueMatch = body.match(/<v>([\s\S]*?)<\/v>/u);
-      const formulaMatch = body.match(/<f\b[^>]*>([\s\S]*?)<\/f>/u);
-      let raw = textMatch != null
-        ? decodeXml(textMatch)
-        : valueMatch
-          ? decodeXml(valueMatch[1])
-          : formulaMatch
-            ? formulaValueFallback(decodeXml(formulaMatch[1]))
-            : "";
-      if (shared && raw !== "") raw = sharedStrings[Number(raw)] ?? raw;
-      row[index] = coerceCell(raw);
-    }
-    rows[rowIndex] = row;
-  }
-  applyMergedCells(rows, xml);
-  return normalizeRows(rows);
-}
-
-function formulaValueFallback(value) {
-  const text = clean(value).replace(/^=/u, "");
-  return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/iu.test(text) ? text : "";
-}
-
-function applyMergedCells(rows, xml) {
-  for (const match of xml.matchAll(/<mergeCell\b[^>]*\bref="([A-Z]+\d+):([A-Z]+\d+)"[^>]*\/?>/gu)) {
-    const start = match[1];
-    const end = match[2];
-    const startRow = rowNumber(start);
-    const endRow = rowNumber(end);
-    const startCol = columnIndex(start);
-    const endCol = columnIndex(end);
-    const value = rows[startRow]?.[startCol];
-    if (value === undefined || value === "") continue;
-    for (let r = startRow; r <= endRow; r += 1) {
-      if (!rows[r]) rows[r] = [];
-      for (let c = startCol; c <= endCol; c += 1) {
-        if (rows[r][c] === undefined || rows[r][c] === "") rows[r][c] = value;
-      }
-    }
-  }
 }
 
 function coerceCell(raw) {
@@ -305,35 +224,70 @@ function safeRows(rows) {
   return Array.isArray(rows) ? rows.map(normalizeRow) : [];
 }
 
-function logRawSheetRowsDebug(sheet, rowNumbers, sharedStrings = []) {
-  if (!sheet?.xml) return;
-  for (const rowNumberValue of rowNumbers) {
-    const rowMatch = sheet.xml.match(new RegExp(`<row\\b[^>]*\\br="${rowNumberValue}"[^>]*>([\\s\\S]*?)<\\/row>`, "u"));
-    if (!rowMatch) {
-      console.warn(`[debug] raw ${sheet.name} row${rowNumberValue}: <missing row>`);
-      continue;
+function cellDisplayValue(cell) {
+  if (!cell) return "";
+  const value = cell.value;
+  if (value === undefined || value === null) return "";
+  if (typeof value === "number" && /[%％]/u.test(cell.numFmt || "")) return formatPercentValue(value, cell.numFmt);
+  if (value instanceof Date) return cell.text || value.toISOString();
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value.richText)) return value.richText.map((part) => part.text || "").join("");
+  if (value.result !== undefined && value.result !== null) return value.result;
+  if (value.text !== undefined && value.text !== null) return value.text;
+  if (value.hyperlink && value.text) return value.text;
+  if (cell.text !== undefined && cell.text !== null) return cell.text;
+  return "";
+}
+
+function formatPercentValue(value, numberFormat = "") {
+  const decimals = numberFormat.match(/\.([0#]+)/u)?.[1]?.length || 0;
+  const percentValue = Math.abs(value) <= 1 ? value * 100 : value;
+  return `${percentValue.toFixed(decimals)}%`;
+}
+
+function parseExcelSheet(worksheet) {
+  const rows = [];
+  for (let rowIndex = 0; rowIndex < worksheet.rowCount; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    const excelRow = worksheet.getRow(rowIndex + 1);
+    for (let column = 0; column < worksheet.columnCount; column += 1) {
+      const raw = cellDisplayValue(excelRow.getCell(column + 1));
+      if (raw !== "") row[column] = coerceCell(raw);
     }
-    const cells = [...rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gu)].map((match) => {
-      const attrs = match[1];
-      const body = match[2];
-      const ref = attrs.match(/\br="([^"]+)"/u)?.[1] || "?";
-      const type = attrs.match(/\bt="([^"]+)"/u)?.[1] || "";
-      const style = attrs.match(/\bs="([^"]+)"/u)?.[1] || "";
-      const value = body.match(/<v>([\s\S]*?)<\/v>/u)?.[1] || "";
-      const formula = body.match(/<f\b[^>]*>([\s\S]*?)<\/f>/u)?.[1] || "";
-      const inline = body.match(/<is\b[^>]*>([\s\S]*?)<\/is>/u)?.[1] || "";
-      const text = inline
-        ? [...inline.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/gu)].map((item) => decodeXml(item[1])).join("")
-        : body.match(/<t[^>]*>([\s\S]*?)<\/t>/u)?.[1] || "";
-      const sharedText = type === "s" && value !== "" ? sharedStrings[Number(value)] ?? "" : "";
-      return `${ref}{t=${type},s=${style},v=${JSON.stringify(decodeXml(value))},ss=${JSON.stringify(sharedText)},f=${JSON.stringify(decodeXml(formula))},tText=${JSON.stringify(decodeXml(text))}}`;
-    });
-    console.warn(`[debug] raw ${sheet.name} row${rowNumberValue}: ${cells.join(" | ") || "<no cells>"}`);
+    rows[rowIndex] = row;
   }
-  const merges = [...sheet.xml.matchAll(/<mergeCell\b[^>]*\bref="([^"]+)"[^>]*\/?>/gu)]
-    .map((match) => match[1])
-    .filter((ref) => rowNumbers.some((rowNumberValue) => mergeRefTouchesRow(ref, rowNumberValue)));
-  if (merges.length) console.warn(`[debug] raw ${sheet.name} merges near rows ${rowNumbers.join(",")}: ${merges.join(", ")}`);
+  applyExcelMergedCells(rows, worksheet);
+  return normalizeRows(rows);
+}
+
+function applyExcelMergedCells(rows, worksheet) {
+  for (const mergeRef of worksheet.model?.merges || []) {
+    const [start, end] = mergeRef.split(":");
+    const startRow = rowNumber(start);
+    const endRow = rowNumber(end || start);
+    const startCol = columnIndex(start);
+    const endCol = columnIndex(end || start);
+    const value = rows[startRow]?.[startCol];
+    if (value === undefined || value === "") continue;
+    for (let row = startRow; row <= endRow; row += 1) {
+      if (!rows[row]) rows[row] = [];
+      for (let column = startCol; column <= endCol; column += 1) {
+        if (rows[row][column] === undefined || rows[row][column] === "") rows[row][column] = value;
+      }
+    }
+  }
+}
+
+function logExcelRowsDebug(sheet, rowNumbers) {
+  for (const rowNumberValue of rowNumbers) {
+    const row = normalizeRow(sheet.rows[rowNumberValue - 1]);
+    const cells = row
+      .map((value, index) => clean(value) ? `${columnLabel(index)}${rowNumberValue}=${JSON.stringify(value)}` : "")
+      .filter(Boolean);
+    console.warn(`[debug] excel ${sheet.name} row${rowNumberValue}: ${cells.join(" | ") || "<no cells>"}`);
+  }
+  const merges = (sheet.worksheet.model?.merges || []).filter((ref) => rowNumbers.some((rowNumberValue) => mergeRefTouchesRow(ref, rowNumberValue)));
+  if (merges.length) console.warn(`[debug] excel ${sheet.name} merges near rows ${rowNumbers.join(",")}: ${merges.join(", ")}`);
 }
 
 function mergeRefTouchesRow(ref, rowNumberValue) {
@@ -347,23 +301,18 @@ function isBlankRow(row = []) {
   return row.every((cell) => String(cell ?? "").trim() === "");
 }
 
-function readWorkbook(xlsxPath) {
-  const sharedStringsXml = unzipText(xlsxPath, "xl/sharedStrings.xml", true);
-  const sharedStrings = sharedStringsXml ? parseSharedStringsXml(sharedStringsXml) : [];
-  const styles = parseStyles(xlsxPath);
-  const entries = zipList(xlsxPath).filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/u.test(entry));
-  const sheets = entries.map((entry, index) => {
-    const xml = unzipText(xlsxPath, entry);
+async function readWorkbook(xlsxPath) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(xlsxPath);
+  const sheets = workbook.worksheets.map((worksheet, index) => {
     return {
-      name: `sheet${index + 1}`,
-      entry,
-      rows: parseSheet(xml, sharedStrings, styles),
-      xml: debugMode ? xml : "",
+      name: worksheet.name || `sheet${index + 1}`,
+      entry: worksheet.name || `sheet${index + 1}`,
+      rows: parseExcelSheet(worksheet),
+      worksheet,
     };
   });
   return {
-    sharedStrings,
-    sharedStringsXml: debugMode ? sharedStringsXml : "",
     sheets,
     byRole: {
       base: sheets[0]?.rows || [],
@@ -633,20 +582,17 @@ function threadId(scenarioId, threadType) {
   return `${scenarioId}-${threadType}`;
 }
 
-async function dumpWorkbookXmlDebug(xlsxPath, scenarioId, workbook) {
+async function dumpWorkbookExcelDebug(xlsxPath, scenarioId, workbook) {
   const dir = path.dirname(xlsxPath);
   const prefix = `${path.basename(xlsxPath, path.extname(xlsxPath))}.${safeFilePart(scenarioId)}.debug`;
-  if (workbook.sharedStringsXml) {
-    const outPath = path.join(dir, `${prefix}.sharedStrings.xml`);
-    await fs.writeFile(outPath, workbook.sharedStringsXml, "utf8");
-    console.warn(`[debug] dumped sharedStrings xml: ${outPath}`);
-  }
-  for (const sheet of workbook.sheets) {
-    if (!sheet.xml) continue;
-    const outPath = path.join(dir, `${prefix}.${sheet.name}.xml`);
-    await fs.writeFile(outPath, sheet.xml, "utf8");
-    console.warn(`[debug] dumped ${sheet.name} xml: ${outPath}`);
-  }
+  const outPath = path.join(dir, `${prefix}.excel.json`);
+  const payload = workbook.sheets.map((sheet) => ({
+    name: sheet.name,
+    merges: sheet.worksheet.model?.merges || [],
+    rows: sheet.rows,
+  }));
+  await fs.writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
+  console.warn(`[debug] dumped parsed excel workbook: ${outPath}`);
 }
 
 function safeFilePart(value) {
@@ -679,21 +625,20 @@ function ensureThread(threadMap, scenarioId, threadName, threadType, loadShare =
 }
 
 async function importScenario(db, statements, sourceInfo, warnings) {
-  const workbook = readWorkbook(sourceInfo.xlsxPath);
+  const workbook = await readWorkbook(sourceInfo.xlsxPath);
   if (debugMode) {
     console.warn(`[debug] reading ${sourceInfo.xlsxPath}`);
     console.warn(`[debug] sheets: ${workbook.sheets.map((sheet) => `${sheet.name}:${sheet.rows.length} rows`).join(", ") || "none"}`);
-    logRawSheetRowsDebug(workbook.sheets[0], [104, 105, 106], workbook.sharedStrings);
-    logRawSheetRowsDebug(
+    logExcelRowsDebug(workbook.sheets[0], [104, 105, 106]);
+    logExcelRowsDebug(
       workbook.sheets[0],
       [108, 109, 110, 111, 112, 113, 118, 121, 127, 136, 137, 138, 164, 165, 166],
-      workbook.sharedStrings,
     );
   }
   const base = baseObject(workbook, sourceInfo);
   const scenarioId = scenarioIdFromSource(sourceInfo, base);
   if (debugMode) console.warn(`[debug] scenario ${scenarioId}: ${JSON.stringify(base)}`);
-  if (debugMode) await dumpWorkbookXmlDebug(sourceInfo.xlsxPath, scenarioId, workbook);
+  if (debugMode) await dumpWorkbookExcelDebug(sourceInfo.xlsxPath, scenarioId, workbook);
   const hitraceDir = path.join(path.dirname(sourceInfo.xlsxPath), "hitrace");
   try {
     const stat = await fs.stat(hitraceDir);
@@ -1316,7 +1261,7 @@ function logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, densi
   const refs = ["A", "B", "C", "D", "E", "F", "G", "H"].map((col, colIndex) => `${col}${rowIndex + 1}=${JSON.stringify(clean(normalizeRow(row)[colIndex]))}`);
   console.warn(`[debug] syscall row${rowIndex + 1} type=${fixedTopdownThreadTypes[index] || ""} name=${JSON.stringify(name)} rawDensity=${JSON.stringify(rawDensity)} density=${density} ${refs.join(" ")}`);
   if (rawDensity == null || rawDensity === "") {
-    console.warn(`[debug] syscall row${rowIndex + 1} density is empty in xlsx XML; checked C${rowIndex + 1} and B${rowIndex + 1}.`);
+    console.warn(`[debug] syscall row${rowIndex + 1} density is empty in parsed Excel cells; checked C${rowIndex + 1} and B${rowIndex + 1}.`);
   }
 }
 

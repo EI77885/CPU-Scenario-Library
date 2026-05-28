@@ -12,5 +12,8 @@
     "update:data": "node scripts/update-trace-summary.js && node scripts/import-source-data.js",
     "setup:data": "node scripts/generate-source-data.js && node scripts/import-source-data.js",
     "start": "node server.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
   }
 }
