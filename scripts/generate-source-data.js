@@ -39,6 +39,14 @@ const topdownKernelRows = [
   ["", "CYCLE_ratio", "BE BOUND", "BAD_INST_SPEC", "L2D_CACHE_REFILL_RD", ""],
 ];
 
+const instructionRows = [
+  ["ld/st_retired", "atomic/cas_spec"],
+  ["br_retired", "ld/strex_spec"],
+  ["dp_spec", "unaligned_ldst_spec"],
+  ["ase_spec", "barrier_spec"],
+  ["sve_inst_spec", "vfp_spec"],
+];
+
 function xml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -273,7 +281,7 @@ function targetSheetForScenario(scenario) {
   sheet.merge("A78:L78");
   sheet.set(78, 1, "4. 指令分布");
   sheet.rangeStyle(78, 1, 78, 12, cellStyles.section);
-  const instructionStarts = [79, 88, 96];
+  const instructionStarts = [79, 87, 95];
   scenario.threads.forEach((thread, threadIndex) => {
     const start = instructionStarts[threadIndex];
     const threadRows = scenario.instructions.filter((row) => row.threadId === thread.id);
@@ -285,9 +293,8 @@ function targetSheetForScenario(scenario) {
     sheet.set(start + 1, 1, "ALL");
     sheet.set(start + 1, 5, "Kernel");
     sheet.rangeStyle(start + 1, 1, start + 1, 8, cellStyles.label);
-    for (let i = 0; i < instructionEvents.length; i += 2) {
-      const row = start + 2 + i / 2;
-      const events = instructionEvents.slice(i, i + 2);
+    instructionRows.forEach((events, rowIndex) => {
+      const row = start + 2 + rowIndex;
       sheet.row(row, [
         ...events.flatMap((event) => [event.toUpperCase() + "_PKI", threadRows.find((item) => item.scope === "total" && item.event === event)?.value ?? ""]),
         events[0]?.toUpperCase() + "_PKI",
@@ -296,18 +303,15 @@ function targetSheetForScenario(scenario) {
         threadRows.find((item) => item.scope === "kernel" && item.event === events[1])?.value ?? "",
       ]);
       sheet.rangeStyle(row, 1, row, 8, cellStyles.metric);
-    }
+    });
   });
 
   sheet.merge("A103:L103");
   sheet.set(103, 1, "5. 系统调用");
   sheet.rangeStyle(103, 1, 103, 12, cellStyles.section);
-  sheet.row(104, ["线程名", "", "系统调用密度（每千万条指令）", "TOP1系统调用及占比", "TOP2系统调用及占比", "TOP3系统调用及占比", "TOP4系统调用及占比", "TOP5系统调用及占比"]);
-  sheet.merge("A104:B104");
-  sheet.rangeStyle(104, 1, 104, 8, cellStyles.label);
   scenario.syscalls.forEach((syscall, index) => {
     const thread = scenario.threads.find((item) => item.id === syscall.threadId);
-    const row = 105 + index;
+    const row = 104 + index;
     sheet.merge(`A${row}:B${row}`);
     sheet.row(row, [
       `${thread.name}线程`,
@@ -315,19 +319,21 @@ function targetSheetForScenario(scenario) {
       syscall.density,
       ...syscall.calls.filter((call) => call.name !== "others").slice(0, 5).map((call) => `${call.number}_${call.name}(${call.share}%)`),
     ]);
+    sheet.rangeStyle(row, 1, row, 8, cellStyles.normal);
   });
 
-  sheet.merge("A108:L108");
-  sheet.set(108, 1, "6. 热点SO及函数&Bound SO及函数");
-  sheet.rangeStyle(108, 1, 108, 12, cellStyles.section);
-  let row = 109;
-  for (const dimension of ["cycle", "fe", "be"]) {
-    sheet.merge(`A${row}:L${row}`);
-    sheet.set(row, 1, dimension.toUpperCase());
-    sheet.rangeStyle(row, 1, row, 12, cellStyles.section);
-    row += 1;
-    for (const hotspot of scenario.hotspots.filter((item) => item.dimension === dimension)) {
+  const hotspotBlocks = [
+    { dimension: "cycle", headerRow: 108, startRow: 109 },
+    { dimension: "fe", headerRow: 136, startRow: 137 },
+    { dimension: "be", headerRow: 164, startRow: 165 },
+  ];
+  for (const block of hotspotBlocks) {
+    sheet.merge(`A${block.headerRow}:L${block.headerRow}`);
+    sheet.set(block.headerRow, 1, block.dimension.toUpperCase());
+    sheet.rangeStyle(block.headerRow, 1, block.headerRow, 12, cellStyles.section);
+    for (const [threadIndex, hotspot] of scenario.hotspots.filter((item) => item.dimension === block.dimension).entries()) {
       const thread = scenario.threads.find((item) => item.id === hotspot.threadId);
+      let row = block.startRow + threadIndex * 9;
       const threadStart = row;
       for (const so of hotspot.sos) {
         const soStart = row;

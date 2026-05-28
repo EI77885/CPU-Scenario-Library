@@ -94,12 +94,19 @@ const threadOrder = ["main", "main", "render", "render", "other", "other"];
 const scopeOrder = ["total", "kernel", "total", "kernel", "total", "kernel"];
 const fixedTopdownBlockStarts = [37, 50, 63];
 const fixedTopdownThreadTypes = ["main", "render", "other"];
-const fixedInstructionBlockStarts = [78, 87, 95];
-const fixedSyscallRows = [104, 105, 106];
+const fixedInstructionBlockStarts = [78, 86, 94];
+const fixedSyscallRows = [103, 104, 105];
 const fixedHotspotBlocks = [
-  { dimension: "cycle", headerRow: 108, startRow: 109 },
-  { dimension: "fe", headerRow: 136, startRow: 137 },
-  { dimension: "be", headerRow: 164, startRow: 165 },
+  { dimension: "cycle", headerRow: 107, startRow: 108 },
+  { dimension: "fe", headerRow: 135, startRow: 136 },
+  { dimension: "be", headerRow: 163, startRow: 164 },
+];
+const fixedInstructionRows = [
+  ["ld/st_retired", "atomic/cas_spec"],
+  ["br_retired", "ld/strex_spec"],
+  ["dp_spec", "unaligned_ldst_spec"],
+  ["ase_spec", "barrier_spec"],
+  ["sve_inst_spec", "vfp_spec"],
 ];
 const fixedTopdownTotalRows = [
   ["IPC", "FE BOUND", "BE BOUND", "L1D_CACHE_REFILL", "L1D_TLB_REFILL_RD", "MEMSTALL_ANYSTORE"],
@@ -1146,15 +1153,13 @@ function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
     const threadName = fixedSectionThreadName(rows[blockStart], fixedTopdownThreadTypes[blockIndex] || "main");
     const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
-    for (let index = 0; index < instructionEvents.length; index += 2) {
-      const rowIndex = blockStart + 2 + index / 2;
-      const firstEvent = instructionEvents[index];
-      const secondEvent = instructionEvents[index + 1];
-      count += addFixedInstruction(parsed, thread, "total", firstEvent, rows[rowIndex]?.[1]);
-      count += addFixedInstruction(parsed, thread, "total", secondEvent, rows[rowIndex]?.[3]);
-      count += addFixedInstruction(parsed, thread, "kernel", firstEvent, rows[rowIndex]?.[5]);
-      count += addFixedInstruction(parsed, thread, "kernel", secondEvent, rows[rowIndex]?.[7]);
-    }
+    fixedInstructionRows.forEach(([firstEvent, secondEvent], rowOffset) => {
+      const row = rows[blockStart + 2 + rowOffset];
+      count += addFixedInstruction(parsed, thread, "total", firstEvent, row?.[1]);
+      count += addFixedInstruction(parsed, thread, "total", secondEvent, row?.[3]);
+      count += addFixedInstruction(parsed, thread, "kernel", firstEvent, row?.[5]);
+      count += addFixedInstruction(parsed, thread, "kernel", secondEvent, row?.[7]);
+    });
   });
   return count;
 }

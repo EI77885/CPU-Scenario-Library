@@ -1034,7 +1034,7 @@ function instructionTable(thread) {
     h("table", { class: "compact-table" }, [
       h("thead", {}, [h("tr", {}, ["事件/PKI", "总体", "内核态"].map((header) => h("th", {}, [header])))]),
       h("tbody", {}, total.map((item, index) => h("tr", {}, [
-        h("td", { title: displayText(item.name) }, [displayText(item.name)]),
+        h("td", { title: displayText(item.name).toUpperCase() }, [displayText(item.name).toUpperCase()]),
         h("td", {}, [displayValue(item.value)]),
         h("td", {}, [displayValue(kernel[index]?.value)]),
       ]))),
