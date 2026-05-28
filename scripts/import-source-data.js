@@ -834,8 +834,8 @@ function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
     { cluster: "中核", rows: [29, 30, 31] },
     { cluster: "大核", rows: [32, 33, 34] },
   ];
-  const hasTargetRunningCells = layout.some((item) => item.rows.some((rowIndex) => numericCellOrNull(rows[rowIndex]?.[2]) != null));
-  if (!hasTargetRunningCells) return;
+  const hasTargetCells = layout.some((item) => item.rows.some((rowIndex) => numericCellOrNull(rows[rowIndex]?.[2]) != null || numericCellOrNull(rows[rowIndex]?.[4]) != null));
+  if (!hasTargetCells) return;
   for (const item of layout) {
     if (!clusterSeen.has(item.cluster)) clusterSeen.set(item.cluster, { cluster: item.cluster, avgFreqMhz: 0, allProcess: 0, uiProcess: 0, renderService: 0 });
     const cluster = clusterSeen.get(item.cluster);
@@ -843,9 +843,24 @@ function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
     if (allProcess != null) cluster.allProcess = boundedNumber(allProcess);
     if (uiProcess != null) cluster.uiProcess = boundedNumber(uiProcess);
     if (renderService != null) cluster.renderService = boundedNumber(renderService);
+    const avgFreqMhz = numericCellOrNull(rows[item.rows[0]]?.[4]);
+    if (avgFreqMhz != null && avgFreqMhz > 300 && avgFreqMhz < 10000) cluster.avgFreqMhz = round2(avgFreqMhz);
   }
   const fps = numericCellOrNull(rows[26]?.[3]);
   if (fps != null && fps > 0 && fps <= 300) parsed.hizee.scene.fps = round2(fps);
+  if (hasTargetHizeeSceneColumns(rows[25])) {
+    const ddrFreqMhz = numericCellOrNull(rows[26]?.[5]);
+    if (ddrFreqMhz != null && ddrFreqMhz > 300 && ddrFreqMhz < 10000) parsed.hizee.scene.ddrFreqMhz = round2(ddrFreqMhz);
+    const bandwidth = numericCellOrNull(rows[26]?.[6]);
+    if (bandwidth != null && bandwidth > 0 && bandwidth < 1000) parsed.hizee.scene.bandwidth = round2(bandwidth);
+    const latency = numericCellOrNull(rows[26]?.[7]);
+    if (latency != null && latency > 0 && latency < 10000) parsed.hizee.scene.latency = round2(latency);
+  }
+}
+
+function hasTargetHizeeSceneColumns(headerRow) {
+  const cells = normalizeRow(headerRow).map(clean);
+  return /DDR/iu.test(cells[5] || "") && /平均带宽|bandwidth/iu.test(cells[6] || "") && /latency|时延/iu.test(cells[7] || "");
 }
 
 function clusterFromRow(row) {
