@@ -352,10 +352,37 @@ function findValueRight(rows, labels) {
   return "";
 }
 
+function cellAt(rows, ref) {
+  return safeRows(rows)[rowNumber(ref)]?.[columnIndex(ref)] ?? "";
+}
+
+function appAwareScenarioName(appName, sceneName, fallbackName) {
+  const app = clean(appName);
+  const scene = clean(sceneName) || clean(fallbackName);
+  if (!app || !scene) return scene || app || clean(fallbackName);
+  return includesScenarioAppName(scene, app) ? scene : `${app}_${scene}`;
+}
+
+function includesScenarioAppName(sceneName, appName) {
+  const scene = clean(sceneName);
+  const app = clean(appName);
+  if (!scene || !app) return false;
+  if (scene.includes(app)) return true;
+  const normalizedScene = normalizeNameForCompare(scene);
+  const normalizedApp = normalizeNameForCompare(app);
+  return Boolean(normalizedApp && normalizedScene.includes(normalizedApp));
+}
+
+function normalizeNameForCompare(value) {
+  return clean(value).toLowerCase().replace(/[\s_\-./\\]+/gu, "");
+}
+
 function oneSheetObject(workbook, sourceInfo) {
   const rows = workbook.sheets.flatMap((sheet) => sheet.rows);
   const dirName = path.basename(path.dirname(sourceInfo.xlsxPath));
-  const name = clean(findValueRight(rows, ["场景名称"])) || dirName;
+  const appName = clean(findValueRight(rows, ["游戏/应用名称", "游戏名称", "应用名称"])) || clean(cellAt(rows, "D2"));
+  const sceneName = clean(findValueRight(rows, ["场景名称"])) || clean(cellAt(rows, "H2"));
+  const name = appAwareScenarioName(appName, sceneName, dirName);
   return {
     type: clean(findValueRight(rows, ["场景类型"])) || sourceInfo.type,
     name,
@@ -371,9 +398,10 @@ function oneSheetObject(workbook, sourceInfo) {
 function sixSheetBaseObject(rows, fallbackType, xlsxPath) {
   const map = new Map(safeRows(rows).slice(1).map((row) => [row[0], row[1]]));
   const dirName = path.basename(path.dirname(xlsxPath));
+  const name = appAwareScenarioName(map.get("游戏/应用名称") || map.get("游戏名称") || map.get("应用名称"), map.get("场景名称"), dirName);
   return {
     type: fallbackType || map.get("场景类型"),
-    name: map.get("场景名称") || dirName,
+    name,
     appVersion: map.get("游戏/应用版本号") || "unknown",
     description: map.get("场景描述") || dirName,
     config: map.get("场景配置说明") || "",
