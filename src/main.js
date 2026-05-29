@@ -53,8 +53,8 @@ const state = {
   trendMetric: initialTrendMetric.key,
   trendCategory: getTrendMetricCategory(initialTrendMetric.key),
   threadTypes: new Set(["main", "render", "other"]),
-  expandedTopdownThreadTypes: new Set(),
-  expandedHotspotThreadTypes: new Set(),
+  expandedTopdownThreadIndexes: new Set(),
+  expandedHotspotThreadIndexes: new Set(),
   savedTrends: [],
 };
 
@@ -315,8 +315,7 @@ function renderLoadCard(scenario) {
 function renderTopdownCard(scenario) {
   return h("article", { class: "card" }, [
     cardHeader(scenario),
-    ...asArray(scenario.topdownInfo).map((thread) => {
-      const type = getThreadType(thread);
+    ...asArray(scenario.topdownInfo).map((thread, threadIndex) => {
       const body = [
         threadTitle(thread),
         metricLegend(),
@@ -327,12 +326,12 @@ function renderTopdownCard(scenario) {
         dualMetricBars(asObject(total.level1), asObject(kernel.level1), "PKI"),
         renderTopdownHierarchy(asArray(total.hierarchy), asObject(total.level1)),
       ];
-      return threadDisclosure(type === "main", body, content, type);
+      return threadDisclosure(threadIndex === 0, body, content, threadIndex);
     }),
   ]);
 }
 
-function threadDisclosure(alwaysOpen, titleContent, content, threadType) {
+function threadDisclosure(alwaysOpen, titleContent, content, threadIndex) {
   if (alwaysOpen) {
     return h("div", { class: "thread-block" }, [
       h("div", { class: "thread-title-row" }, titleContent),
@@ -341,9 +340,9 @@ function threadDisclosure(alwaysOpen, titleContent, content, threadType) {
   }
   return h("details", {
     class: "thread-block collapsible-thread",
-    open: state.expandedTopdownThreadTypes.has(threadType),
+    open: state.expandedTopdownThreadIndexes.has(threadIndex),
   }, [
-    h("summary", { onclick: (event) => toggleTopdownThread(event, threadType) }, titleContent),
+    h("summary", { onclick: (event) => toggleTopdownThread(event, threadIndex) }, titleContent),
     ...content,
   ]);
 }
@@ -384,9 +383,8 @@ function renderHotspotDimension(dimension, label, threads) {
       h("span", {}, ["Top3 线程 / Top3 SO / Top3 函数"]),
     ]),
     h("div", { class: "hotspot-thread-list" }, asArray(threads).map((thread, threadIndex) => {
-      const type = getThreadType(thread);
       const title = [
-        h("b", {}, [`${threadIndex + 1}. `, threadTypeBadge(thread.threadType), displayText(thread.name)]),
+        h("b", {}, [`${threadIndex + 1}. `, threadNameLabel(thread.name)]),
         loadBadge(thread.loadShare),
       ];
       const content = [h("div", { class: "so-list" }, asArray(thread.sos).map((so, soIndex) => h("div", { class: "so-card" }, [
@@ -399,39 +397,39 @@ function renderHotspotDimension(dimension, label, threads) {
           h("b", {}, [displayValue(func.value, "%")]),
         ]))),
       ])))];
-      return hotspotDisclosure(type === "main", title, content, dimension, type);
+      return hotspotDisclosure(threadIndex === 0, title, content, dimension, threadIndex);
     })),
   ]);
 }
 
-function hotspotDisclosure(alwaysOpen, titleContent, content, dimension, threadType) {
+function hotspotDisclosure(alwaysOpen, titleContent, content, dimension, threadIndex) {
   if (alwaysOpen) {
     return h("article", { class: "hotspot-thread" }, [
       h("div", { class: "hotspot-thread-title" }, titleContent),
       ...content,
     ]);
   }
-  const stateKey = `${dimension}:${threadType}`;
+  const stateKey = `${dimension}:${threadIndex}`;
   return h("details", {
     class: "hotspot-thread collapsible-hotspot",
-    open: state.expandedHotspotThreadTypes.has(stateKey),
+    open: state.expandedHotspotThreadIndexes.has(stateKey),
   }, [
     h("summary", { onclick: (event) => toggleHotspotThread(event, stateKey) }, titleContent),
     ...content,
   ]);
 }
 
-function toggleTopdownThread(event, threadType) {
+function toggleTopdownThread(event, threadIndex) {
   event.preventDefault();
-  if (state.expandedTopdownThreadTypes.has(threadType)) state.expandedTopdownThreadTypes.delete(threadType);
-  else state.expandedTopdownThreadTypes.add(threadType);
+  if (state.expandedTopdownThreadIndexes.has(threadIndex)) state.expandedTopdownThreadIndexes.delete(threadIndex);
+  else state.expandedTopdownThreadIndexes.add(threadIndex);
   render();
 }
 
 function toggleHotspotThread(event, stateKey) {
   event.preventDefault();
-  if (state.expandedHotspotThreadTypes.has(stateKey)) state.expandedHotspotThreadTypes.delete(stateKey);
-  else state.expandedHotspotThreadTypes.add(stateKey);
+  if (state.expandedHotspotThreadIndexes.has(stateKey)) state.expandedHotspotThreadIndexes.delete(stateKey);
+  else state.expandedHotspotThreadIndexes.add(stateKey);
   render();
 }
 
@@ -782,12 +780,12 @@ function loadBadge(value) {
 }
 
 function threadTitle(thread, suffix = "") {
-  return h("h4", {}, [threadTypeBadge(thread.threadType), displayText(thread.name), loadBadge(thread.loadShare), suffix]);
+  return h("h4", {}, [threadNameLabel(thread.name), loadBadge(thread.loadShare), suffix]);
 }
 
-function threadTypeBadge(type) {
-  const labels = { main: "主逻辑", render: "渲染", other: "其他" };
-  return h("span", { class: `thread-type-badge ${type || "other"}` }, [labels[type] || labels.other]);
+function threadNameLabel(name) {
+  const text = displayText(name);
+  return `${text}${/线程$/u.test(text) ? "" : "线程"}`;
 }
 
 function threadTypeLabel(type) {
