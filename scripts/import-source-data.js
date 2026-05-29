@@ -1375,7 +1375,7 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
     if (isHotspotDimensionRow(row, "fe")) dimension = "fe";
     if (isHotspotDimensionRow(row, "be")) dimension = "be";
     const indexed = normalizeRow(row).map((cell, column) => ({ cell, column, text: clean(cell) })).filter((item) => item.text);
-    const threadCell = indexed.find((item) => item.column <= 1 && !isLibraryCell(item.text) && !isFunctionCell(item.text) && parseNamedPercent(item.text).name && hasWrappedPercent(item.text))
+    const threadCell = indexed.find((item) => item.column <= 1 && !isLibraryCell(item.text) && !isExplicitFunctionCell(item.text) && parseNamedPercent(item.text).name && hasWrappedPercent(item.text))
       || indexed.find((item) => item.column <= 1 && looksLikeThreadName(item.text));
     if (threadCell) {
       const parsedThread = parseNamedPercent(threadCell.text);
@@ -1387,7 +1387,7 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
       currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell.text, "library"));
     }
     const functionCells = indexed.filter((item) =>
-      isFunctionCell(item.text)
+      isExplicitFunctionCell(item.text)
       || looksLikeHotspotFunctionCell(item, firstLibraryColumn)
     );
     for (const functionCell of functionCells) {
@@ -1478,7 +1478,7 @@ function firstHotspotThreadInRange(row, startColumn, endColumn) {
   const cells = normalizeRow(row);
   for (let column = startColumn; column <= endColumn; column += 1) {
     const text = clean(cells[column]);
-    if (!text || isLibraryCell(text) || isFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) continue;
+    if (!text || isLibraryCell(text) || isExplicitFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) continue;
     const parsed = parseNamedPercent(text);
     if ((parsed.name && hasWrappedPercent(text)) || looksLikeThreadName(text)) return parsed;
   }
@@ -1508,7 +1508,11 @@ function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
   const prioritized = kind === "library"
     ? [...candidates.filter((text) => isLibraryCell(text)), ...candidates.filter((text) => !isLibraryCell(text) && !looksLikeThreadName(text))]
     : kind === "function"
-      ? [...candidates.filter((text) => isFunctionCell(text)), ...candidates.filter((text) => !isFunctionCell(text) && !looksLikeThreadName(text))]
+      ? [
+          ...candidates.filter((text) => isExplicitFunctionCell(text)),
+          ...candidates.filter((text) => !isExplicitFunctionCell(text) && looksLikeFunctionText(text)),
+          ...candidates.filter((text) => !isExplicitFunctionCell(text) && !looksLikeFunctionText(text) && !isLibraryCell(text) && !looksLikeThreadName(text)),
+        ]
       : candidates;
   for (const text of prioritized) {
     const source = kind ? stripHotspotPrefix(text, kind) : text;
@@ -1520,7 +1524,7 @@ function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
 
 function isHotspotDimensionRow(row, dimension) {
   const cells = [...new Set(normalizeRow(row).map(clean).filter(Boolean))];
-  if (!cells.length || cells.some((cell) => isLibraryCell(cell) || isFunctionCell(cell))) return false;
+  if (!cells.length || cells.some((cell) => isLibraryCell(cell) || isExplicitFunctionCell(cell))) return false;
   const text = cells.join(" ").trim();
   if (dimension === "cycle") return /^(CYCLE|热点|CPU热点|Cycle热点)$/iu.test(text);
   if (dimension === "fe") return /^(FE|FE\s*BOUND|FE瓶颈|前端瓶颈)$/iu.test(text);
@@ -1535,15 +1539,20 @@ function isLibraryCell(value) {
     || /(\.so(?:\b|[.\s+])|\[kernel\.kallsyms\]|kallsyms|\/system\/|\/vendor\/|\/proc\/)/iu.test(text);
 }
 
-function isFunctionCell(value) {
+function isExplicitFunctionCell(value) {
   return /^(Function|函数|方法)\s*[:：]/iu.test(clean(value)) || /^Function\b/iu.test(clean(value));
+}
+
+function isFunctionCell(value) {
+  const text = clean(value);
+  return isExplicitFunctionCell(text) || looksLikeFunctionText(text);
 }
 
 function looksLikeHotspotSoCell(item) {
   if (!item || item.column < 2 || item.column > 4) return false;
   const parsed = parseNamedPercent(item.text);
   if (!parsed.name || !parsed.value) return false;
-  if (looksLikeThreadName(item.text) || isFunctionCell(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
+  if (looksLikeThreadName(item.text) || isExplicitFunctionCell(item.text) || looksLikeFunctionText(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
   return true;
 }
 
@@ -1556,6 +1565,15 @@ function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
   return true;
 }
 
+function looksLikeFunctionText(value) {
+  const text = stripHotspotPrefix(value, "function");
+  if (!text || looksLikeThreadName(text)) return false;
+  return /\+0x[0-9a-f]+/iu.test(text)
+    || /\b0x[0-9a-f]+\b/iu.test(text)
+    || /(?:^|[/\s])(?:[A-Za-z_~][\w~]*::)+[A-Za-z_~][\w~]*/u.test(text)
+    || /^[A-Za-z_~][\w~]*(?:\([^)]*\))?\s*[（(]\s*[\d.]+\s*[%％]\s*[）)]$/u.test(text);
+}
+
 function stripHotspotPrefix(value, kind) {
   const text = clean(value).replace(/\s+/gu, " ");
   return kind === "library"
@@ -1565,7 +1583,7 @@ function stripHotspotPrefix(value, kind) {
 
 function looksLikeThreadName(value) {
   const text = clean(value);
-  if (!text || isLibraryCell(text) || isFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) return false;
+  if (!text || isLibraryCell(text) || isExplicitFunctionCell(text) || isHotspotDimensionRow([text], "cycle") || isHotspotDimensionRow([text], "fe") || isHotspotDimensionRow([text], "be")) return false;
   return /线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity|Binder|Gfx/iu.test(text);
 }
 
