@@ -259,7 +259,12 @@ function buildSyscall(db, thread) {
 function buildHotspots(db, scenarioId, dimension, threads) {
   const rows = all(db, "SELECT * FROM hotspot_threads WHERE scenario_id = ? AND dimension = ? ORDER BY rank", [scenarioId, dimension]);
   const builtRows = rows.map((row) => {
-    const thread = threads.find((item) => item.id === row.thread_id) || {};
+    const fallbackThread = threads.find((item) => item.id === row.thread_id) || {};
+    const thread = {
+      name: row.name || fallbackThread.name,
+      threadType: row.thread_type || fallbackThread.threadType,
+      loadShare: valueAtOrNA(row.score),
+    };
     const sos = all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank LIMIT 3", [row.id]).map((so) => {
       const funcs = all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank LIMIT 3", [so.id]).map(roundValueRow);
       return {

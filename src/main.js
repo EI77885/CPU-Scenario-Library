@@ -387,7 +387,7 @@ function renderHotspotDimension(dimension, label, threads) {
     h("div", { class: "hotspot-thread-list" }, asArray(threads).map((thread, threadIndex) => {
       const title = [
         h("b", {}, [`${threadIndex + 1}. `, threadNameLabel(thread.name)]),
-        loadBadge(thread.loadShare),
+        hotspotScoreBadge(dimension, thread.score),
       ];
       const content = [h("div", { class: "so-list" }, asArray(thread.sos).map((so, soIndex) => h("div", { class: "so-card" }, [
         h("div", { class: "so-title" }, [
@@ -779,6 +779,11 @@ function badge(text) {
 
 function loadBadge(value) {
   return h("span", { class: "load-badge" }, [`负载 ${displayValue(value, "%")}`]);
+}
+
+function hotspotScoreBadge(dimension, value) {
+  const label = { cycle: "负载占比", fe: "FE BOUND占比", be: "BE BOUND占比" }[dimension] || "占比";
+  return h("span", { class: "load-badge" }, [`${label} ${displayValue(value, "%")}`]);
 }
 
 function threadTitle(thread, suffix = "") {

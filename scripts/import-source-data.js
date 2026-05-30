@@ -513,7 +513,7 @@ function createSchema(db) {
     CREATE TABLE IF NOT EXISTS instruction_metrics (thread_id TEXT NOT NULL, scope TEXT NOT NULL, event TEXT NOT NULL, value REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_metrics (thread_id TEXT PRIMARY KEY, density REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_top (thread_id TEXT NOT NULL, rank INTEGER NOT NULL, number INTEGER NOT NULL, name TEXT NOT NULL, share REAL NOT NULL);
-    CREATE TABLE IF NOT EXISTS hotspot_threads (id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, dimension TEXT NOT NULL, thread_id TEXT NOT NULL, rank INTEGER NOT NULL, score REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS hotspot_threads (id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, dimension TEXT NOT NULL, thread_id TEXT NOT NULL, rank INTEGER NOT NULL, score REAL NOT NULL, name TEXT NOT NULL DEFAULT '', thread_type TEXT NOT NULL DEFAULT '');
     CREATE TABLE IF NOT EXISTS hotspot_sos (id TEXT PRIMARY KEY, hotspot_thread_id TEXT NOT NULL, rank INTEGER NOT NULL, name TEXT NOT NULL, value REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS hotspot_functions (hotspot_so_id TEXT NOT NULL, rank INTEGER NOT NULL, name TEXT NOT NULL, value REAL NOT NULL);
   `);
@@ -525,6 +525,9 @@ function migrateSchema(db) {
   if (!scenarioColumns.has("updated_at")) {
     db.exec("ALTER TABLE scenarios ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP");
   }
+  const hotspotThreadColumns = new Set(db.prepare("PRAGMA table_info(hotspot_threads)").all().map((row) => row.name));
+  if (!hotspotThreadColumns.has("name")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+  if (!hotspotThreadColumns.has("thread_type")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN thread_type TEXT NOT NULL DEFAULT ''");
 }
 
 function resetSchema(db) {
@@ -588,7 +591,7 @@ function prepareStatements(db) {
     instruction: db.prepare("INSERT INTO instruction_metrics VALUES (?, ?, ?, ?)"),
     syscallMetric: db.prepare("INSERT INTO syscall_metrics VALUES (?, ?)"),
     syscallTop: db.prepare("INSERT INTO syscall_top VALUES (?, ?, ?, ?, ?)"),
-    hotspotThread: db.prepare("INSERT INTO hotspot_threads VALUES (?, ?, ?, ?, ?, ?)"),
+    hotspotThread: db.prepare("INSERT INTO hotspot_threads (id, scenario_id, dimension, thread_id, rank, score, name, thread_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
     hotspotSo: db.prepare("INSERT INTO hotspot_sos VALUES (?, ?, ?, ?, ?)"),
     hotspotFunction: db.prepare("INSERT INTO hotspot_functions VALUES (?, ?, ?, ?)"),
   };
@@ -815,6 +818,8 @@ function parseSixSheetHotspots(rows, parsed, scenarioId) {
     parsed.hotspots.push({
       dimension: clean(dimensionRaw).toLowerCase(),
       threadId: thread.id,
+      threadName: clean(threadName),
+      threadType: thread.type,
       threadScore: numberFrom(threadScore),
       soName,
       soValue: numberFrom(soValue),
@@ -1413,6 +1418,8 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
         parsed.hotspots.push({
           dimension,
           threadId: currentThread.id,
+          threadName: currentThread.name,
+          threadType: currentThread.type,
           threadScore: currentThread.loadShare,
           soName: currentSo.name,
           soValue: currentSo.value,
@@ -1434,6 +1441,9 @@ function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
       parsed.hotspots.push({
         dimension: block.dimension,
         threadId: thread.id,
+        threadName: record.threadName,
+        threadType: record.threadType,
+        threadRank: record.threadRank,
         threadScore: record.threadScore,
         soName: record.soName,
         soValue: record.soValue,
@@ -1460,8 +1470,9 @@ function parseFixedHotspotBlock(rows, block) {
         const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
         if (!fn.name) continue;
         records.push({
-          threadType: fixedTopdownThreadTypes[threadIndex] || "",
+          threadType: inferThreadType(thread.name, threadIndex),
           threadName: thread.name,
+          threadRank: threadIndex + 1,
           threadScore: thread.value,
           soName: so.name,
           soValue: so.value,
@@ -1507,7 +1518,7 @@ function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
       ? [
           ...candidates.filter((text) => isExplicitFunctionCell(text)),
           ...candidates.filter((text) => !isExplicitFunctionCell(text) && looksLikeFunctionText(text)),
-          ...candidates.filter((text) => !isExplicitFunctionCell(text) && !looksLikeFunctionText(text) && !isLibraryCell(text) && !looksLikeThreadName(text)),
+          ...candidates.filter((text) => !isExplicitFunctionCell(text) && !looksLikeFunctionText(text)),
         ]
       : candidates;
   for (const text of prioritized) {
@@ -1557,13 +1568,13 @@ function looksLikeHotspotFunctionCell(item, firstLibraryColumn) {
   if (firstLibraryColumn >= 0 && item.column <= firstLibraryColumn) return false;
   const parsed = parseNamedPercent(item.text);
   if (!parsed.name || !parsed.value) return false;
-  if (looksLikeThreadName(item.text) || isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
+  if (isHotspotDimensionRow([item.text], "cycle") || isHotspotDimensionRow([item.text], "fe") || isHotspotDimensionRow([item.text], "be")) return false;
   return true;
 }
 
 function looksLikeFunctionText(value) {
   const text = stripHotspotPrefix(value, "function");
-  if (!text || looksLikeThreadName(text)) return false;
+  if (!text) return false;
   return /\+0x[0-9a-f]+/iu.test(text)
     || /\b0x[0-9a-f]+\b/iu.test(text)
     || /(?:^|[/\s])(?:[A-Za-z_~][\w~]*::)+[A-Za-z_~][\w~]*/u.test(text)
@@ -1777,11 +1788,23 @@ function importSyscallRows(statements, syscalls) {
 
 function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
   const groups = new Map();
+  const nextRanks = new Map();
   for (const row of hotspots) {
     const thread = [...threadMap.values()].find((item) => item.id === row.threadId);
     if (!thread || !row.soName || !row.functionName) continue;
-    const groupKey = `${row.dimension}:${thread.id}`;
-    if (!groups.has(groupKey)) groups.set(groupKey, { dimension: row.dimension, thread, score: round2(row.threadScore), sos: new Map() });
+    const threadName = clean(row.threadName) || thread.name;
+    const threadType = clean(row.threadType) || inferThreadType(threadName, 0);
+    const slotRank = Number(row.threadRank);
+    const groupKey = Number.isInteger(slotRank) && slotRank > 0
+      ? `${row.dimension}:slot:${slotRank}`
+      : `${row.dimension}:name:${threadName}`;
+    if (!groups.has(groupKey)) {
+      const nextRank = nextRanks.get(row.dimension) || 1;
+      const rank = Number.isInteger(slotRank) && slotRank > 0 ? slotRank : nextRank;
+      if (rank > 3) continue;
+      groups.set(groupKey, { dimension: row.dimension, thread, threadName, threadType, rank, score: round2(row.threadScore), sos: new Map() });
+      nextRanks.set(row.dimension, Math.max(nextRank, rank + 1));
+    }
     const group = groups.get(groupKey);
     if (!group.sos.has(row.soName)) {
       if (group.sos.size >= 3) continue;
@@ -1791,9 +1814,9 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
     if (functions.length >= 3 || functions.some((item) => item.name === row.functionName)) continue;
     functions.push({ name: row.functionName, value: round2(row.functionValue) });
   }
-  for (const [groupIndex, group] of [...groups.values()].entries()) {
-    const htId = `${scenarioId}-${group.dimension}-${group.thread.type}-${groupIndex + 1}`;
-    statements.hotspotThread.run(htId, scenarioId, group.dimension, group.thread.id, groupIndex + 1, group.score || group.thread.loadShare || 0);
+  for (const group of groups.values()) {
+    const htId = `${scenarioId}-${group.dimension}-slot-${group.rank}`;
+    statements.hotspotThread.run(htId, scenarioId, group.dimension, group.thread.id, group.rank, group.score || 0, group.threadName, group.threadType);
     [...group.sos.values()].slice(0, 3).forEach((so, soIndex) => {
       const soId = `${htId}-so-${soIndex + 1}`;
       statements.hotspotSo.run(soId, htId, soIndex + 1, so.name, so.value || 0);
