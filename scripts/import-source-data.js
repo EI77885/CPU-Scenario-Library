@@ -100,9 +100,9 @@ const fixedTopdownThreadTypes = ["main", "render", "other"];
 const fixedInstructionDataStarts = [79, 87, 95];
 const fixedSyscallRows = [103, 104, 105];
 const fixedHotspotBlocks = [
-  { dimension: "cycle", headerRow: 107, startRow: 108 },
-  { dimension: "fe", headerRow: 135, startRow: 136 },
-  { dimension: "be", headerRow: 163, startRow: 164 },
+  { dimension: "cycle", headerRow: 107, startRow: 108, endRow: 135 },
+  { dimension: "fe", headerRow: 135, startRow: 136, endRow: 163 },
+  { dimension: "be", headerRow: 163, startRow: 164, endRow: 191 },
 ];
 const fixedInstructionRows = [
   ["ld/st_retired", "ld/strex_spec"],
@@ -360,21 +360,9 @@ function appAwareScenarioName(appName, sceneName, fallbackName) {
   const app = clean(appName);
   const scene = clean(sceneName) || clean(fallbackName);
   if (!app || !scene) return scene || app || clean(fallbackName);
-  return includesScenarioAppName(scene, app) ? scene : `${app}_${scene}`;
-}
-
-function includesScenarioAppName(sceneName, appName) {
-  const scene = clean(sceneName);
-  const app = clean(appName);
-  if (!scene || !app) return false;
-  if (scene.includes(app)) return true;
-  const normalizedScene = normalizeNameForCompare(scene);
-  const normalizedApp = normalizeNameForCompare(app);
-  return Boolean(normalizedApp && normalizedScene.includes(normalizedApp));
-}
-
-function normalizeNameForCompare(value) {
-  return clean(value).toLowerCase().replace(/[\s_\-./\\]+/gu, "");
+  const parts = scene.split("_").map(clean).filter(Boolean);
+  if (parts.length <= 1) return `${app}_${scene}`;
+  return `${app}_${parts.slice(1).join("_")}`;
 }
 
 function oneSheetObject(workbook, sourceInfo) {
@@ -1408,8 +1396,9 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
     if (threadCell) {
       const parsedThread = parseNamedPercent(threadCell.text);
       currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", parsedThread.value);
+      currentSo = null;
     }
-    const libraryCells = indexed.filter((item) => isLibraryCell(item.text) || looksLikeHotspotSoCell(item));
+    const libraryCells = indexed.filter((item) => (item.column >= 2 && item.column <= 4 && isLibraryCell(item.text)) || looksLikeHotspotSoCell(item));
     const firstLibraryColumn = libraryCells[0]?.column ?? -1;
     for (const libraryCell of libraryCells) {
       currentSo = parseNamedPercent(stripHotspotPrefix(libraryCell.text, "library"));
@@ -1438,13 +1427,9 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
 function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   for (const block of fixedHotspotBlocks) {
-    const candidates = hotspotCandidateStarts(block).flatMap((firstThreadStart) =>
-      hotspotColumnLayouts().map((layout) => parseFixedHotspotBlockAt(rows, block, firstThreadStart, layout))
-    );
-    const best = candidates.sort((a, b) => b.records.length - a.records.length)[0];
-    if (debugMode) logHotspotCoordinateDebug(rows, block, candidates);
-    if (!best?.records.length) continue;
-    for (const record of best.records) {
+    const records = parseFixedHotspotBlock(rows, block);
+    if (debugMode) logHotspotCoordinateDebug(rows, block, records);
+    for (const record of records) {
       const thread = ensureThread(parsed.threads, scenarioId, record.threadName, record.threadType, record.threadScore);
       parsed.hotspots.push({
         dimension: block.dimension,
@@ -1461,36 +1446,23 @@ function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
   return count;
 }
 
-function hotspotCandidateStarts(block) {
-  return [...new Set([block.startRow, block.headerRow + 1, block.headerRow + 2, block.headerRow + 3])].sort((a, b) => a - b);
-}
-
-function hotspotColumnLayouts() {
-  return [
-    { name: "target", thread: [0, 1], so: [2, 4], fn: [5, 7] },
-    { name: "left1", thread: [0, 0], so: [1, 3], fn: [4, 6] },
-    { name: "right1", thread: [0, 2], so: [3, 5], fn: [6, 8] },
-    { name: "wide", thread: [0, 2], so: [2, 5], fn: [5, 8] },
-  ];
-}
-
-function parseFixedHotspotBlockAt(rows, block, firstThreadStart, layout) {
+function parseFixedHotspotBlock(rows, block) {
   const records = [];
   for (let threadIndex = 0; threadIndex < 3; threadIndex += 1) {
-    const threadStart = firstThreadStart + threadIndex * 9;
-    const parsedThread = firstHotspotThreadInRange(rows[threadStart], layout.thread[0], layout.thread[1]);
-    if (!parsedThread.name) continue;
+    const threadStart = block.startRow + threadIndex * 9;
+    const thread = firstHotspotThreadInRange(rows[threadStart], 0, 1);
+    if (!thread.name) continue;
     for (let soIndex = 0; soIndex < 3; soIndex += 1) {
       const soStart = threadStart + soIndex * 3;
-      const so = firstNamedPercentInRange(rows[soStart], layout.so[0], layout.so[1], "library");
+      const so = firstNamedPercentInRange(rows[soStart], 2, 4, "library");
       if (!so.name) continue;
       for (let functionIndex = 0; functionIndex < 3; functionIndex += 1) {
-        const fn = firstNamedPercentInRange(rows[soStart + functionIndex], layout.fn[0], layout.fn[1], "function");
+        const fn = firstNamedPercentInRange(rows[soStart + functionIndex], 5, 7, "function");
         if (!fn.name) continue;
         records.push({
           threadType: fixedTopdownThreadTypes[threadIndex] || "",
-          threadName: parsedThread.name,
-          threadScore: parsedThread.value,
+          threadName: thread.name,
+          threadScore: thread.value,
           soName: so.name,
           soValue: so.value,
           functionName: fn.name,
@@ -1499,7 +1471,7 @@ function parseFixedHotspotBlockAt(rows, block, firstThreadStart, layout) {
       }
     }
   }
-  return { firstThreadStart, layout, records };
+  return records;
 }
 
 function firstHotspotThreadInRange(row, startColumn, endColumn) {
@@ -1513,16 +1485,12 @@ function firstHotspotThreadInRange(row, startColumn, endColumn) {
   return { name: "", value: 0 };
 }
 
-function logHotspotCoordinateDebug(rows, block, candidates) {
-  const summary = candidates.map((candidate) => `row${candidate.firstThreadStart + 1}/${candidate.layout.name}:${candidate.records.length}`).join(", ");
-  console.warn(`[debug] hotspot ${block.dimension} candidates ${summary}`);
-  for (const candidate of candidates.filter((item) => item.records.length || item.layout.name === "target")) {
-    const sampleRows = [candidate.firstThreadStart, candidate.firstThreadStart + 1, candidate.firstThreadStart + 2, candidate.firstThreadStart + 3, candidate.firstThreadStart + 4]
-      .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 10).map(clean))}`)
-      .join(" ");
-    const first = candidate.records[0];
-    console.warn(`[debug] hotspot ${block.dimension} candidate row${candidate.firstThreadStart + 1}/${candidate.layout.name} soCols=${candidate.layout.so.join("-")} fnCols=${candidate.layout.fn.join("-")} records=${candidate.records.length} first=${first ? JSON.stringify({ so: first.soName, fn: first.functionName }) : "NA"} ${sampleRows}`);
-  }
+function logHotspotCoordinateDebug(rows, block, records) {
+  const sampleRows = [block.startRow, block.startRow + 1, block.startRow + 2, block.startRow + 3, block.startRow + 4]
+    .map((rowIndex) => `r${rowIndex + 1}=${JSON.stringify(normalizeRow(rows[rowIndex]).slice(0, 10).map(clean))}`)
+    .join(" ");
+  const first = records[0];
+  console.warn(`[debug] hotspot ${block.dimension} rows=${block.startRow + 1}-${block.endRow} records=${records.length} first=${first ? JSON.stringify({ thread: first.threadName, so: first.soName, fn: first.functionName }) : "NA"} ${sampleRows}`);
 }
 
 function firstNamedPercentInRange(row, startColumn, endColumn, kind = "") {
@@ -1815,13 +1783,18 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
     const groupKey = `${row.dimension}:${thread.id}`;
     if (!groups.has(groupKey)) groups.set(groupKey, { dimension: row.dimension, thread, score: round2(row.threadScore), sos: new Map() });
     const group = groups.get(groupKey);
-    if (!group.sos.has(row.soName)) group.sos.set(row.soName, { name: row.soName, value: round2(row.soValue), functions: [] });
-    group.sos.get(row.soName).functions.push({ name: row.functionName, value: round2(row.functionValue) });
+    if (!group.sos.has(row.soName)) {
+      if (group.sos.size >= 3) continue;
+      group.sos.set(row.soName, { name: row.soName, value: round2(row.soValue), functions: [] });
+    }
+    const functions = group.sos.get(row.soName).functions;
+    if (functions.length >= 3 || functions.some((item) => item.name === row.functionName)) continue;
+    functions.push({ name: row.functionName, value: round2(row.functionValue) });
   }
   for (const [groupIndex, group] of [...groups.values()].entries()) {
     const htId = `${scenarioId}-${group.dimension}-${group.thread.type}-${groupIndex + 1}`;
     statements.hotspotThread.run(htId, scenarioId, group.dimension, group.thread.id, groupIndex + 1, group.score || group.thread.loadShare || 0);
-    [...group.sos.values()].forEach((so, soIndex) => {
+    [...group.sos.values()].slice(0, 3).forEach((so, soIndex) => {
       const soId = `${htId}-so-${soIndex + 1}`;
       statements.hotspotSo.run(soId, htId, soIndex + 1, so.name, so.value || 0);
       so.functions.slice(0, 3).forEach((fn, fnIndex) => statements.hotspotFunction.run(soId, fnIndex + 1, fn.name, fn.value || 0));

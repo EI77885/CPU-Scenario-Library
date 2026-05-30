@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server.js",
+    "dev": "npm run update:data && node server.js",
     "generate:data": "node scripts/generate-source-data.js",
     "trace:summary": "node scripts/update-trace-summary.js",
     "import:data": "node scripts/import-source-data.js",

@@ -1,5 +1,6 @@
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -25,6 +26,17 @@ const NA = "NA";
 
 function dbExists() {
   return fs.existsSync(dbPath);
+}
+
+function localNetworkUrls(portNumber) {
+  const urls = new Set();
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    for (const address of addresses || []) {
+      if (address.family !== "IPv4" || address.internal) continue;
+      urls.add(`http://${address.address}:${portNumber}/`);
+    }
+  }
+  return [...urls];
 }
 
 function withDb(callback) {
@@ -248,8 +260,8 @@ function buildHotspots(db, scenarioId, dimension, threads) {
   const rows = all(db, "SELECT * FROM hotspot_threads WHERE scenario_id = ? AND dimension = ? ORDER BY rank", [scenarioId, dimension]);
   const builtRows = rows.map((row) => {
     const thread = threads.find((item) => item.id === row.thread_id) || {};
-    const sos = all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank", [row.id]).map((so) => {
-      const funcs = all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank", [so.id]).map(roundValueRow);
+    const sos = all(db, "SELECT * FROM hotspot_sos WHERE hotspot_thread_id = ? ORDER BY rank LIMIT 3", [row.id]).map((so) => {
+      const funcs = all(db, "SELECT name, value FROM hotspot_functions WHERE hotspot_so_id = ? ORDER BY rank LIMIT 3", [so.id]).map(roundValueRow);
       return {
         name: so.name || missingHotspotName(dimension, thread, "so"),
         value: valueAtOrNA(so.value),
@@ -564,5 +576,13 @@ server.on("error", (error) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`CPU 场景库 Dashboard: http://localhost:${port}`);
+  console.log(`CPU 场景库 Dashboard 已启动`);
+  console.log(`本机访问: http://localhost:${port}/`);
+  const networkUrls = localNetworkUrls(port);
+  if (networkUrls.length) {
+    console.log(`局域网访问地址:`);
+    networkUrls.forEach((url) => console.log(`  ${url}`));
+  } else {
+    console.log(`未检测到可用的局域网 IPv4 地址，请确认目标环境已连接内部网络。`);
+  }
 });

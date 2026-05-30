@@ -240,6 +240,8 @@ const compareSyncSelectors = [
   ":scope > .hotspot-dimensions > .hotspot-dimension",
   ":scope > .hotspot-dimensions > .hotspot-dimension .hotspot-thread",
   ":scope > .hotspot-dimensions > .hotspot-dimension .so-card",
+  ":scope > .hotspot-dimensions > .hotspot-dimension .so-title",
+  ":scope > .hotspot-dimensions > .hotspot-dimension .func-list li",
 ];
 
 let compareHeightSyncFrame = 0;
