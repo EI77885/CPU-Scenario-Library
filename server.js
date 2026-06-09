@@ -124,7 +124,7 @@ function scenarioFull(db, scenarioId) {
       })),
     },
     topdownInfo: topdownThreads.map((thread) => buildTopdown(db, thread)),
-    instructionMix: instructionThreads.map((thread) => buildInstruction(db, thread)),
+    instructionMix: instructionThreads.map((thread) => buildInstruction(db, thread, scenario.base.type === "冷启动")),
     syscallInfo: syscallThreads.map((thread) => buildSyscall(db, thread)),
     hotspotInfo: {
       cycle: buildHotspots(db, scenarioId, "cycle", displayThreads),
@@ -262,16 +262,17 @@ function buildHierarchy(rows, valueFor) {
   }).filter((group) => group.level2.length || rows.some((row) => row.scope === "total" && row.parent === group.metric));
 }
 
-function buildInstruction(db, thread) {
+function buildInstruction(db, thread, coldStart = false) {
   const rows = all(db, "SELECT * FROM instruction_metrics WHERE thread_id = ?", [thread.id]);
   const valueFor = (scope, event) => {
     const row = rows.find((item) => item.scope === scope && item.event === event);
     return row ? preciseValueAtOrNA(row.value) : NA;
   };
+  const loadShare = coldStart && threadEntityKind(thread) === "process" ? NA : threadLoadShare(thread);
   return {
     name: thread.name,
     threadType: thread.threadType,
-    loadShare: threadLoadShare(thread),
+    loadShare,
     total: instructionEvents.map((event) => ({ name: event, value: valueFor("total", event) })),
     kernel: instructionEvents.map((event) => ({ name: event, value: valueFor("kernel", event) })),
   };
