@@ -597,8 +597,8 @@ function prepareStatements(db) {
   };
 }
 
-function threadId(scenarioId, threadType) {
-  return `${scenarioId}-${threadType}`;
+function threadId(scenarioId, threadName) {
+  return `${scenarioId}-thread-${safeFilePart(normalizeThreadKey(threadName))}`;
 }
 
 async function dumpWorkbookExcelDebug(xlsxPath, scenarioId, workbook) {
@@ -625,22 +625,57 @@ function inferThreadType(threadName, rank) {
   return "other";
 }
 
+function canonicalThreadType(value) {
+  const text = clean(value).toLowerCase();
+  if (!text) return "";
+  if (/主逻辑|主线程|main|activity|agent|camera/iu.test(text)) return "main";
+  if (/渲染|render|gfx|preview/iu.test(text)) return "render";
+  if (/其他|other|worker|binder|device/iu.test(text)) return "other";
+  return "";
+}
+
+function parseThreadInfo(threadName, threadType = "") {
+  const parsedPercent = parseNamedPercent(threadName);
+  let name = clean(parsedPercent.name || threadName);
+  let type = canonicalThreadType(threadType);
+  const typedMatch = name.match(/^(.*?)\s*[-_－—–]\s*(主逻辑线程|主线程|渲染线程|其他线程|main\s*thread|render\s*thread|other\s*thread|main|render|other)(?:\s*[-_－—–]\s*.*)?$/iu);
+  if (typedMatch) {
+    name = clean(typedMatch[1]);
+    type ||= canonicalThreadType(typedMatch[2]);
+  }
+  name = name
+    .replace(/线程\s*[-_－—– ]*(all|kernel|总体|内核).*$/iu, "")
+    .replace(/\s*[-_－—–]\s*(all|kernel|总体|内核).*$/iu, "")
+    .replace(/线程$/u, "")
+    .trim();
+  return {
+    name: name || clean(parsedPercent.name || threadName),
+    type,
+  };
+}
+
+function normalizeThreadKey(threadName) {
+  return clean(parseThreadInfo(threadName).name)
+    .normalize("NFKC")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase();
+}
+
 function ensureThread(threadMap, scenarioId, threadName, threadType, loadShare = 0) {
-  const name = clean(threadName).replace(/线程$/u, "");
-  const type = clean(threadType) || inferThreadType(name, threadMap.size);
-  const id = threadId(scenarioId, type);
-  const existingById = [...threadMap.values()].find((thread) => thread.id === id);
-  if (existingById && !threadMap.has(name)) {
-    if (loadShare && !existingById.loadShare) existingById.loadShare = round2(loadShare);
-    threadMap.set(name, existingById);
-    return existingById;
+  const parsed = parseThreadInfo(threadName, threadType);
+  const name = parsed.name;
+  const key = normalizeThreadKey(name);
+  const existing = threadMap.get(key);
+  if (existing) {
+    const type = parsed.type || clean(threadType);
+    if (type && (!existing.type || existing.type === "other")) existing.type = type;
+    if (loadShare && !existing.loadShare) existing.loadShare = round2(loadShare);
+    return existing;
   }
-  if (!threadMap.has(name)) {
-    threadMap.set(name, { id, name, type, loadShare: round2(loadShare), rank: threadMap.size + 1 });
-  } else if (loadShare && !threadMap.get(name).loadShare) {
-    threadMap.get(name).loadShare = round2(loadShare);
-  }
-  return threadMap.get(name);
+  const type = parsed.type || clean(threadType) || inferThreadType(name, threadMap.size);
+  const thread = { id: threadId(scenarioId, name), name, type, loadShare: round2(loadShare), rank: threadMap.size + 1 };
+  threadMap.set(key, thread);
+  return thread;
 }
 
 async function importScenario(db, statements, sourceInfo, warnings) {
@@ -746,7 +781,7 @@ function parseSixSheet(workbook, scenarioId, warnings) {
     ensureThread(parsed.threads, scenarioId, row[0], row[1]);
   }
   for (const row of hotspotRows.slice(1).filter((item) => item[0])) {
-    ensureThread(parsed.threads, scenarioId, row[1], "", row[2]);
+    ensureThread(parsed.threads, scenarioId, row[1], "", clean(row[0]).toLowerCase() === "cycle" ? row[2] : 0);
   }
   safeParse(warnings, scenarioId, "hizee", () => parseSixSheetHizee(safeRows(workbook.byRole.load), parsed));
   safeParse(warnings, scenarioId, "topdown", () => parseSixSheetTopdown(topdownRows, parsed, scenarioId));
@@ -814,9 +849,10 @@ function parseSixSheetHotspots(rows, parsed, scenarioId) {
   for (const row of rows.slice(1)) {
     const [dimensionRaw, threadName, threadScore, soName, soValue, functionName, functionValue] = row;
     if (!dimensionRaw || !threadName || !soName || !functionName) continue;
-    const thread = ensureThread(parsed.threads, scenarioId, threadName, "", threadScore);
+    const dimension = clean(dimensionRaw).toLowerCase();
+    const thread = ensureThread(parsed.threads, scenarioId, threadName, "", dimension === "cycle" ? threadScore : 0);
     parsed.hotspots.push({
-      dimension: clean(dimensionRaw).toLowerCase(),
+      dimension,
       threadId: thread.id,
       threadName: clean(threadName),
       threadType: thread.type,
@@ -1151,8 +1187,9 @@ function parseFixedTopdownCoordinates(rows, parsed, scenarioId) {
   fixedTopdownBlockStarts.forEach((blockStart, blockIndex) => {
     const headerText = rowText(rows[blockStart]);
     if (!/线程.*(all|kernel)|thread/iu.test(headerText)) return;
-    const threadName = fixedTopdownThreadName(rows[blockStart], blockIndex);
-    const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
+    const threadInfo = fixedSectionThreadInfo(rows[blockStart], fixedTopdownThreadTypes[blockIndex] || "main");
+    const threadName = threadInfo.name;
+    const threadType = threadInfo.type || fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
     count += parseFixedTopdownRows(rows, blockStart + 1, fixedTopdownTotalRows, thread, "total", parsed);
     count += parseFixedTopdownRows(rows, blockStart + 11, fixedTopdownKernelRows, thread, "kernel", parsed);
@@ -1176,12 +1213,16 @@ function parseFixedTopdownRows(rows, startRow, metricRows, thread, scope, parsed
 }
 
 function fixedTopdownThreadName(row, blockIndex) {
-  return fixedSectionThreadName(row, fixedTopdownThreadTypes[blockIndex] || "main");
+  return fixedSectionThreadInfo(row, fixedTopdownThreadTypes[blockIndex] || "main").name;
+}
+
+function fixedSectionThreadInfo(row, fallbackType) {
+  const raw = normalizeRow(row).map(clean).find(Boolean) || `${fallbackType}_thread`;
+  return parseThreadInfo(raw, fallbackType);
 }
 
 function fixedSectionThreadName(row, fallbackType) {
-  const raw = normalizeRow(row).map(clean).find(Boolean) || `${fallbackType}_thread`;
-  return raw.replace(/线程\s*[-_ ]*(all|kernel|总体|内核).*$/iu, "").replace(/[-_ ]*(all|kernel|总体|内核).*$/iu, "").trim() || raw;
+  return fixedSectionThreadInfo(row, fallbackType).name;
 }
 
 function parseOneSheetInstructions(rows, sections, parsed, scenarioId) {
@@ -1214,8 +1255,9 @@ function parseFixedInstructionCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   fixedInstructionDataStarts.forEach((dataStart, blockIndex) => {
     const headerRow = dataStart - 2;
-    const threadName = fixedSectionThreadName(rows[headerRow], fixedTopdownThreadTypes[blockIndex] || "main");
-    const threadType = fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
+    const threadInfo = fixedSectionThreadInfo(rows[headerRow], fixedTopdownThreadTypes[blockIndex] || "main");
+    const threadName = threadInfo.name;
+    const threadType = threadInfo.type || fixedTopdownThreadTypes[blockIndex] || inferThreadType(threadName, blockIndex);
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
     fixedInstructionRows.forEach(([firstEvent, secondEvent], rowOffset) => {
       const row = rows[dataStart + rowOffset];
@@ -1263,7 +1305,8 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
   let count = 0;
   fixedSyscallRows.forEach((rowIndex, index) => {
     const row = rows[rowIndex];
-    const name = fixedSectionThreadName(row, fixedTopdownThreadTypes[index] || "main");
+    const threadInfo = fixedSectionThreadInfo(row, fixedTopdownThreadTypes[index] || "main");
+    const name = threadInfo.name;
     const rawDensity = fixedSyscallDensityRaw(row);
     const density = fixedSyscallDensity(row);
     if (debugMode) logSyscallCoordinateDebug(row, rowIndex, index, name, rawDensity, density);
@@ -1271,7 +1314,7 @@ function parseFixedSyscallCoordinates(rows, parsed, scenarioId) {
     const calls = parseSyscallRowCalls(normalizeRow(row).slice(3, 8), 0);
     if (debugMode) console.warn(`[debug] syscall row${rowIndex + 1} parsed calls=${calls.length} first=${calls[0] ? `${calls[0].number}_${calls[0].name}(${calls[0].share}%)` : "NA"}`);
     if (!calls.length) return;
-    const thread = ensureThread(parsed.threads, scenarioId, name, fixedTopdownThreadTypes[index] || inferThreadType(name, index));
+    const thread = ensureThread(parsed.threads, scenarioId, name, threadInfo.type || fixedTopdownThreadTypes[index] || inferThreadType(name, index));
     parsed.syscalls.push({ threadId: thread.id, density, calls });
     count += 1;
   });
@@ -1400,7 +1443,7 @@ function parseOneSheetHotspots(rows, sections, parsed, scenarioId) {
       || indexed.find((item) => item.column <= 1 && looksLikeThreadName(item.text));
     if (threadCell) {
       const parsedThread = parseNamedPercent(threadCell.text);
-      currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", parsedThread.value);
+      currentThread = ensureThread(parsed.threads, scenarioId, parsedThread.name, "", dimension === "cycle" ? parsedThread.value : 0);
       currentSo = null;
     }
     const libraryCells = indexed.filter((item) => (item.column >= 2 && item.column <= 4 && isLibraryCell(item.text)) || looksLikeHotspotSoCell(item));
@@ -1437,7 +1480,7 @@ function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
     const records = parseFixedHotspotBlock(rows, block);
     if (debugMode) logHotspotCoordinateDebug(rows, block, records);
     for (const record of records) {
-      const thread = ensureThread(parsed.threads, scenarioId, record.threadName, record.threadType, record.threadScore);
+      const thread = ensureThread(parsed.threads, scenarioId, record.threadName, record.threadType, block.dimension === "cycle" ? record.threadScore : 0);
       parsed.hotspots.push({
         dimension: block.dimension,
         threadId: thread.id,
@@ -1611,11 +1654,12 @@ function detectThreadHeaders(row) {
     if (!/线程|thread|Unity|Render|Main|Worker|Device|Camera|Activity/iu.test(cell)) return;
     if (isKnownTopdown(cell) || isKnownInstruction(cell)) return;
     const scope = /kernel|内核/iu.test(cell) ? "kernel" : /all|总体/iu.test(cell) ? "total" : "";
-    const name = cell.replace(/[-_ ]*(all|kernel|总体|内核).*$/iu, "").replace(/线程$/u, "").trim() || cell;
+    const parsed = parseThreadInfo(cell);
+    const name = parsed.name || cell;
     const key = `${name}:${scope}`;
     if (key === lastKey) return;
     lastKey = key;
-    headers.push({ name, threadType: "", scope, column });
+    headers.push({ name, threadType: parsed.type, scope, column });
   });
   return headers;
 }
@@ -1792,12 +1836,13 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
   for (const row of hotspots) {
     const thread = [...threadMap.values()].find((item) => item.id === row.threadId);
     if (!thread || !row.soName || !row.functionName) continue;
-    const threadName = clean(row.threadName) || thread.name;
-    const threadType = clean(row.threadType) || inferThreadType(threadName, 0);
+    const parsedThread = parseThreadInfo(row.threadName || thread.name, row.threadType || thread.type);
+    const threadName = parsedThread.name || thread.name;
+    const threadType = parsedThread.type || inferThreadType(threadName, 0);
     const slotRank = Number(row.threadRank);
     const groupKey = Number.isInteger(slotRank) && slotRank > 0
       ? `${row.dimension}:slot:${slotRank}`
-      : `${row.dimension}:name:${threadName}`;
+      : `${row.dimension}:name:${normalizeThreadKey(threadName)}`;
     if (!groups.has(groupKey)) {
       const nextRank = nextRanks.get(row.dimension) || 1;
       const rank = Number.isInteger(slotRank) && slotRank > 0 ? slotRank : nextRank;

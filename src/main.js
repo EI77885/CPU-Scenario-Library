@@ -747,7 +747,17 @@ function hotspotValueInThread(thread, kind, targetName) {
 }
 
 function sameThread(a, b) {
-  return a?.name === b?.name && getThreadType(a) === getThreadType(b);
+  const aKey = normalizeThreadKey(a?.name);
+  return !!aKey && aKey === normalizeThreadKey(b?.name);
+}
+
+function normalizeThreadKey(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/线程$/u, "")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase();
 }
 
 function findTopdownNodeValue(groups, name) {

@@ -194,6 +194,19 @@ function roundValueRow(row) {
   return row ? { ...row, value: valueAtOrNA(row.value) } : { value: NA };
 }
 
+function normalizeThreadKey(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/线程$/u, "")
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase();
+}
+
+function sameThreadName(a, b) {
+  return normalizeThreadKey(a?.name) && normalizeThreadKey(a?.name) === normalizeThreadKey(b?.name);
+}
+
 function threadLoadShare(thread) {
   return valueAtOrNA(thread?.loadShare);
 }
@@ -259,7 +272,7 @@ function buildSyscall(db, thread) {
 function buildHotspots(db, scenarioId, dimension, threads) {
   const rows = all(db, "SELECT * FROM hotspot_threads WHERE scenario_id = ? AND dimension = ? ORDER BY rank", [scenarioId, dimension]);
   const builtRows = rows.map((row) => {
-    const fallbackThread = threads.find((item) => item.id === row.thread_id) || {};
+    const fallbackThread = threads.find((item) => item.id === row.thread_id) || threads.find((item) => sameThreadName(item, row)) || {};
     const thread = {
       name: row.name || fallbackThread.name,
       threadType: row.thread_type || fallbackThread.threadType,
@@ -281,9 +294,9 @@ function buildHotspots(db, scenarioId, dimension, threads) {
       sos: sos.length ? sos : [missingHotspotSo(dimension, thread)],
     };
   });
-  const seenThreads = new Set(builtRows.map((row) => `${row.threadType}:${row.name}`));
+  const seenThreads = new Set(builtRows.map((row) => normalizeThreadKey(row.name)));
   const missingRows = threads
-    .filter((thread) => !seenThreads.has(`${thread.threadType}:${thread.name}`))
+    .filter((thread) => !seenThreads.has(normalizeThreadKey(thread.name)))
     .slice(0, Math.max(0, 3 - builtRows.length))
     .map((thread) => missingHotspotThread(dimension, thread));
   return [...builtRows, ...missingRows].slice(0, 3);
@@ -445,21 +458,21 @@ function metricValue(scenario, key, thread) {
   if (key.startsWith("topdown.node.")) return findTopdownNodeValue(thread.total?.hierarchy || [], key.slice("topdown.node.".length));
   if (key.startsWith("inst.")) {
     const [, scope, event] = key.split(".");
-    const source = scenario.instructionMix.find((item) => item.name === thread.name && item.threadType === thread.threadType);
+    const source = scenario.instructionMix.find((item) => sameThreadName(item, thread));
     return metricValueOrNA(source?.[scope]?.find((item) => item.name === event)?.value);
   }
   if (key === "syscall.density") {
-    return metricValueOrNA(scenario.syscallInfo.find((item) => item.name === thread.name && item.threadType === thread.threadType)?.density);
+    return metricValueOrNA(scenario.syscallInfo.find((item) => sameThreadName(item, thread))?.density);
   }
   if (key.startsWith("syscall.share.")) {
     const name = key.slice("syscall.share.".length);
-    const source = scenario.syscallInfo.find((item) => item.name === thread.name && item.threadType === thread.threadType);
+    const source = scenario.syscallInfo.find((item) => sameThreadName(item, thread));
     return metricValueOrNA(source?.calls.find((item) => item.name === name)?.value);
   }
   if (key.startsWith("hotspot.")) {
     const [, dimension, kind, encodedName] = key.split(".");
     const targetName = decodeURIComponent(encodedName);
-    const source = scenario.hotspotInfo[dimension]?.find((item) => item.name === thread.name && item.threadType === thread.threadType);
+    const source = scenario.hotspotInfo[dimension]?.find((item) => sameThreadName(item, thread));
     if (!source) return NA;
     if (kind === "so") return metricValueOrNA(source.sos.find((so) => so.name === targetName)?.value);
     const values = source.sos
