@@ -1001,11 +1001,11 @@ function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
   }
   const fps = numericCellOrNull(rows[26]?.[3]);
   if (fps != null && fps > 0 && fps <= 300) parsed.hizee.scene.fps = round2(fps);
+  const bandwidth = numericCellOrNull(rows[26]?.[6]);
+  parsed.hizee.scene.bandwidth = bandwidth != null && bandwidth >= 0 && bandwidth < 1000 ? round2(bandwidth) : 0;
   if (hasTargetHizeeSceneColumns(rows[25])) {
     const ddrFreqMhz = numericCellOrNull(rows[26]?.[5]);
     if (ddrFreqMhz != null && ddrFreqMhz > 300 && ddrFreqMhz < 10000) parsed.hizee.scene.ddrFreqMhz = round2(ddrFreqMhz);
-    const bandwidth = numericCellOrNull(rows[26]?.[6]);
-    if (bandwidth != null && bandwidth >= 0 && bandwidth < 1000) parsed.hizee.scene.bandwidth = round2(bandwidth);
     const latency = numericCellOrNull(rows[26]?.[7]);
     if (latency != null && latency > 0 && latency < 10000) parsed.hizee.scene.latency = round2(latency);
   }
