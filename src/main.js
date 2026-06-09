@@ -307,7 +307,7 @@ function renderLoadCard(scenario) {
     cardHeader(scenario),
     h("h4", {}, ["Trace 三视图"]),
     clusterStateRows(asArray(loadInfo.clusterRunning)),
-    stackedRows(asArray(loadInfo.processRunning), "cluster", "cluster process overview", "累计前 80% 热点进程，其他合并为 other process"),
+    stackedRows(asArray(loadInfo.processRunning), "cluster", "cluster process overview", "累计前 80% 热点进程，其他合并为 other", "process"),
     stackedRows(asArray(loadInfo.threadRunning), "cluster", "cluster thread overview", "继承 other process；前 80% 进程内线程再聚合 other thread"),
     h("h4", {}, ["Hizee 指标矩阵"]),
     hizeeTable(asArray(loadInfo.hizeeRows)),
@@ -860,7 +860,7 @@ function clusterStateRows(items) {
   ]);
 }
 
-function stackedRows(rows, labelKey, title, subtitle) {
+function stackedRows(rows, labelKey, title, subtitle, kind = "") {
   const chartClass = title.includes("thread") ? "chart-three" : "chart-two";
   return h("div", { class: `stacked-rows chart-panel ${chartClass}` }, [
     h("div", { class: "chart-title" }, [
@@ -870,11 +870,18 @@ function stackedRows(rows, labelKey, title, subtitle) {
     ...asArray(rows).map((row) => h("div", { class: "stack-line" }, [
       h("span", { class: "stack-label" }, [displayText(row[labelKey])]),
       h("div", { class: "stack-content" }, [
-        stackedBar(asArray(row.items)),
-        stackLegend(asArray(row.items)),
+        stackedBar(normalizeLoadStackItems(asArray(row.items), kind)),
+        stackLegend(normalizeLoadStackItems(asArray(row.items), kind)),
       ]),
     ])),
   ]);
+}
+
+function normalizeLoadStackItems(items, kind = "") {
+  return asArray(items).map((item) => ({
+    ...item,
+    name: kind === "process" && /^other(?:\s+process)?$/iu.test(displayText(item.name)) ? "other" : item.name,
+  }));
 }
 
 function stackedBar(items) {
@@ -900,18 +907,23 @@ function sortStackItems(items) {
     const bIdle = b.name === "idle";
     if (aIdle && !bIdle) return 1;
     if (!aIdle && bIdle) return -1;
-    const aOther = /^others?$|^other /i.test(a.name);
-    const bOther = /^others?$|^other /i.test(b.name);
+    const aOther = isStackOther(a.name);
+    const bOther = isStackOther(b.name);
     if (aOther && !bOther) return 1;
     if (!aOther && bOther) return -1;
     return (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0);
   });
 }
 
+function isStackOther(name) {
+  return /^others?$|^other(?:\s+|$)/iu.test(displayText(name));
+}
+
 function stackColor(name, index) {
   const fixed = {
     running: "#86efac",
     idle: "#334155",
+    other: "#64748b",
     "other process": "#64748b",
     "other thread": "#94a3b8",
     others: "#64748b",

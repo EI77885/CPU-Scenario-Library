@@ -97,8 +97,8 @@ function compareStackItems(a, b) {
   const bIdle = b.name === "idle";
   if (aIdle && !bIdle) return 1;
   if (!aIdle && bIdle) return -1;
-  const aOther = /^others?$|^other /i.test(a.name);
-  const bOther = /^others?$|^other /i.test(b.name);
+  const aOther = /^others?$|^other(?:\s+|$)/i.test(a.name);
+  const bOther = /^others?$|^other(?:\s+|$)/i.test(b.name);
   if (aOther && !bOther) return 1;
   if (!aOther && bOther) return -1;
   return b.value - a.value;
@@ -116,13 +116,13 @@ function makeScenario(row, index) {
     const idle = round(100 - running);
     return {
       cluster,
-      items: [...makeTop80Stack(processNames, seed + i, running, "other process"), { name: "idle", value: idle }].sort(compareStackItems),
+      items: [...makeTop80Stack(processNames, seed + i, running, "other"), { name: "idle", value: idle }].sort(compareStackItems),
     };
   });
   const threadRunning = clusters.map((cluster, i) => {
     const running = clusterRunning[i].value;
     const idle = round(100 - running);
-    const otherProcess = processRunning[i].items.find((item) => item.name === "other process")?.value || 0;
+    const otherProcess = processRunning[i].items.find((item) => item.name === "other")?.value || 0;
     const threadBudget = Math.max(0, round(running - otherProcess));
     return {
       cluster,

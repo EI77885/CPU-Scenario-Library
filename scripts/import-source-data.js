@@ -1863,7 +1863,7 @@ async function importTraceSummary(statements, scenarioId, hitraceDir, warnings) 
       const cluster = clean(firstDefined(row, ["cluster", "clusterName", "name", "title", "label"])) || "unknown";
       const items = traceSummaryItems(row, ["items", "processes", "processOverview", "data", "children", "values"], "process");
       items.forEach((item, i) => {
-        statements.loadProcess.run(scenarioId, cluster, clean(item.name) || `process_${i + 1}`, boundedNumber(item.value), i + 1);
+        statements.loadProcess.run(scenarioId, cluster, loadProcessName(item.name, i), boundedNumber(item.value), i + 1);
         debug.process.inserted += 1;
       });
     }
@@ -1943,6 +1943,12 @@ function traceSummaryItem(item, fallbackName, mapKey = "") {
   }
   if (Array.isArray(item)) return { name: clean(item[0] ?? mapKey ?? fallbackName), value: item[1] };
   return { name: clean(mapKey || fallbackName), value: item };
+}
+
+function loadProcessName(value, index) {
+  const name = clean(value);
+  if (/^other(?:\s+process)?$/iu.test(name) || /^others?$/iu.test(name)) return "other";
+  return name || `process_${index + 1}`;
 }
 
 function importHizeeRows(statements, scenarioId, hizee) {

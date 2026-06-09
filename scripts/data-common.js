@@ -144,8 +144,8 @@ export function sortStackItems(items) {
     const bIdle = b.name === "idle";
     if (aIdle && !bIdle) return 1;
     if (!aIdle && bIdle) return -1;
-    const aOther = /^others?$|^other /iu.test(a.name);
-    const bOther = /^others?$|^other /iu.test(b.name);
+    const aOther = /^others?$|^other(?:\s+|$)/iu.test(a.name);
+    const bOther = /^others?$|^other(?:\s+|$)/iu.test(b.name);
     if (aOther && !bOther) return 1;
     if (!aOther && bOther) return -1;
     return b.value - a.value;
@@ -218,10 +218,10 @@ export function buildScenario(row, index) {
   const threadNames = ["main_thread", "render_thread", "worker_thread", "binder_thread", "io_thread", "gpu_worker", "jit_thread"];
   const processRunning = clusters.map((cluster, i) => ({
     cluster,
-    items: sortStackItems([...top80Stack(processNames, seed + i, clusterRunning[i].running, "other process"), { name: "idle", value: clusterRunning[i].idle }]),
+    items: sortStackItems([...top80Stack(processNames, seed + i, clusterRunning[i].running, "other"), { name: "idle", value: clusterRunning[i].idle }]),
   }));
   const threadRunning = clusters.map((cluster, i) => {
-    const otherProcess = processRunning[i].items.find((item) => item.name === "other process")?.value || 0;
+    const otherProcess = processRunning[i].items.find((item) => item.name === "other")?.value || 0;
     const threadBudget = Math.max(0, round(clusterRunning[i].running - otherProcess));
     return {
       cluster,

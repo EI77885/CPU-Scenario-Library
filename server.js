@@ -373,7 +373,7 @@ function hotspotDimensionLabel(dimension) {
 }
 
 function buildFeatures(db) {
-  const processNames = topNames(db, "load_process", "name", "name NOT IN ('idle', 'other process')", 5);
+  const processNames = topNames(db, "load_process", "name", "name NOT IN ('idle', 'other', 'other process')", 5);
   const threadNames = topNames(db, "load_thread", "name", "name NOT IN ('idle', 'other thread', 'other process')", 5);
   const syscallNames = [...new Set([...topNames(db, "syscall_top", "name", "name != 'others'", 15), ...syscallPool])];
   const hotspotFeatures = ["cycle", "fe", "be"].flatMap((dimension) => {
