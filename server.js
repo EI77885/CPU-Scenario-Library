@@ -98,9 +98,9 @@ function scenarioFull(db, scenarioId) {
     loadShare: round2(row.load_share),
   }));
   const displayThreads = threads.length ? threads : defaultDisplayThreads(scenarioId, scenario.base.name);
-  const topdownThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "topdown_metrics", displayThreads) : displayThreads;
-  const instructionThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "instruction_metrics", displayThreads) : displayThreads;
-  const syscallThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "syscall_metrics", displayThreads) : displayThreads;
+  const topdownThreads = limitedModuleThreads(db, "topdown_metrics", displayThreads, scenario.base.type === "冷启动");
+  const instructionThreads = limitedModuleThreads(db, "instruction_metrics", displayThreads, scenario.base.type === "冷启动");
+  const syscallThreads = limitedModuleThreads(db, "syscall_metrics", displayThreads, scenario.base.type === "冷启动");
   const hizeeScene = db.prepare("SELECT * FROM hizee_scene WHERE scenario_id = ?").get(scenarioId) || {};
   const hizeeClusters = all(db, "SELECT * FROM hizee_clusters WHERE scenario_id = ? ORDER BY rowid", [scenarioId]);
   return {
@@ -134,8 +134,11 @@ function scenarioFull(db, scenarioId) {
   };
 }
 
-function threadsWithRows(db, table, threads) {
-  return threads.filter((thread) => db.prepare(`SELECT 1 FROM ${table} WHERE thread_id = ? LIMIT 1`).get(thread.id));
+function limitedModuleThreads(db, table, threads, requireRows = false) {
+  const source = requireRows
+    ? threads.filter((thread) => db.prepare(`SELECT 1 FROM ${table} WHERE thread_id = ? LIMIT 1`).get(thread.id))
+    : threads;
+  return source.slice(0, 3);
 }
 
 function defaultDisplayThreads(scenarioId, scenarioName) {
@@ -288,7 +291,7 @@ function buildSyscall(db, thread) {
 
 function buildHotspots(db, scenarioId, dimension, threads) {
   const rows = all(db, "SELECT * FROM hotspot_threads WHERE scenario_id = ? AND dimension = ? ORDER BY rank", [scenarioId, dimension]);
-  const builtRows = rows.map((row) => {
+  const builtRows = normalizeHotspotDuplicateThreadTypes(rows.map((row) => {
     const fallbackThread = threads.find((item) => item.id === row.thread_id) || threads.find((item) => sameThreadName(item, row)) || {};
     const thread = {
       name: row.name || fallbackThread.name,
@@ -310,13 +313,31 @@ function buildHotspots(db, scenarioId, dimension, threads) {
       score: valueAtOrNA(row.score),
       sos: sos.length ? sos : [missingHotspotSo(dimension, thread)],
     };
-  });
+  })).slice(0, 3);
   const seenThreads = new Set(builtRows.map((row) => normalizeThreadKey(row.name)));
   const missingRows = threads
     .filter((thread) => !seenThreads.has(normalizeThreadKey(thread.name)))
     .slice(0, Math.max(0, 3 - builtRows.length))
     .map((thread) => missingHotspotThread(dimension, thread));
   return [...builtRows, ...missingRows].slice(0, 3);
+}
+
+function normalizeHotspotDuplicateThreadTypes(rows) {
+  const byName = new Map();
+  rows.forEach((row) => {
+    const key = normalizeThreadKey(row.name);
+    if (!key) return;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(row);
+  });
+  for (const group of byName.values()) {
+    if (group.length <= 1) continue;
+    const primary = group.reduce((best, row) => (toMetricNumber(row.score) ?? -1) > (toMetricNumber(best.score) ?? -1) ? row : best, group[0]);
+    group.forEach((row) => {
+      row.threadType = row === primary ? "main" : "other";
+    });
+  }
+  return rows;
 }
 
 function missingHotspotThread(dimension, thread) {
