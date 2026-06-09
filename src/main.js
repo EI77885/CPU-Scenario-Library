@@ -45,6 +45,14 @@ const trendMetricCategories = [
   ["hotspot", "热点与瓶颈 SO/函数"],
 ];
 
+const threadTypeOptions = [
+  ["main", "主逻辑线程"],
+  ["render", "渲染线程"],
+  ["other", "其他线程"],
+  ["main_process", "主逻辑进程"],
+  ["render_process", "渲染进程"],
+];
+
 const state = {
   page: "compare",
   compareFilters: {},
@@ -52,7 +60,7 @@ const state = {
   selectedIds: new Set(scenarios.slice(0, 3).map((item) => item.id)),
   trendMetric: initialTrendMetric.key,
   trendCategory: getTrendMetricCategory(initialTrendMetric.key),
-  threadTypes: new Set(["main", "render", "other"]),
+  threadTypes: new Set(threadTypeOptions.map(([value]) => value)),
   expandedTopdownThreadIndexes: new Set(),
   expandedHotspotThreadIndexes: new Set(),
   savedTrends: [],
@@ -692,7 +700,25 @@ window.addEventListener("resize", () => {
 });
 
 function selectedTrendThreads(scenario) {
-  return scenario.topdownInfo.filter((thread) => state.threadTypes.has(getThreadType(thread)));
+  return allScenarioThreads(scenario).filter((thread) => state.threadTypes.has(getThreadType(thread)));
+}
+
+function allScenarioThreads(scenario) {
+  const source = [
+    ...asArray(scenario.topdownInfo),
+    ...asArray(scenario.instructionMix),
+    ...asArray(scenario.syscallInfo),
+    ...asArray(scenario.hotspotInfo?.cycle),
+    ...asArray(scenario.hotspotInfo?.fe),
+    ...asArray(scenario.hotspotInfo?.be),
+  ];
+  return [...new Map(source
+    .filter((thread) => thread?.name)
+    .map((thread) => [`${normalizeThreadFilterKey(thread.name)}:${getThreadType(thread)}`, thread])).values()];
+}
+
+function normalizeThreadFilterKey(value) {
+  return displayText(value).trim().toLowerCase();
 }
 
 function formatFilters(filters) {
@@ -721,12 +747,8 @@ function threadTypeOption(value, label, enabled) {
 
 function renderThreadTypeFilter() {
   return h("div", { class: "field thread-type-field" }, [
-    h("span", {}, ["线程类型"]),
-    h("div", { class: "thread-type-options" }, [
-      threadTypeOption("main", "主逻辑线程", true),
-      threadTypeOption("render", "渲染线程", true),
-      threadTypeOption("other", "其他线程", true),
-    ]),
+    h("span", {}, ["线程/进程类型"]),
+    h("div", { class: "thread-type-options" }, threadTypeOptions.map(([value, label]) => threadTypeOption(value, label, true))),
   ]);
 }
 
@@ -864,12 +886,22 @@ function findTopdownNodeValue(groups, name) {
 }
 
 function getThreadType(thread) {
-  const type = thread?.threadType;
-  return ["main", "render", "other"].includes(type) ? type : "other";
+  return canonicalThreadType(thread?.threadType);
 }
 
 function getThreadDisplayType(thread) {
   return thread?.threadType || "other";
+}
+
+function canonicalThreadType(type) {
+  const text = displayText(type).trim().toLowerCase();
+  if (!text || text === "na") return "other";
+  if (text === "main_process" || /主逻辑进程|main[_\s-]*process/u.test(text)) return "main_process";
+  if (text === "render_process" || /渲染进程|render[_\s-]*process/u.test(text)) return "render_process";
+  if (text === "main" || /主逻辑线程|main/u.test(text)) return "main";
+  if (text === "render" || /渲染线程|render/u.test(text)) return "render";
+  if (text === "other" || /其他线程|other/u.test(text)) return "other";
+  return "other";
 }
 
 function cardHeader(scenario) {
@@ -919,8 +951,15 @@ function threadNameLabel(name) {
 }
 
 function threadTypeLabel(type) {
-  const known = { main: "主逻辑线程", render: "渲染线程", other: "其他线程" };
-  if (known[type]) return known[type];
+  const known = {
+    main: "主逻辑线程",
+    render: "渲染线程",
+    other: "其他线程",
+    main_process: "主逻辑进程",
+    render_process: "渲染进程",
+  };
+  const canonical = canonicalThreadType(type);
+  if (known[canonical]) return known[canonical];
   const text = displayText(type);
   return text && text !== "NA" ? text : "其他线程";
 }

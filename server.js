@@ -220,7 +220,18 @@ function sameThreadName(a, b) {
 }
 
 function threadCategory(thread) {
-  return ["main", "render", "other"].includes(thread?.threadType) ? thread.threadType : "other";
+  return canonicalThreadType(thread?.threadType);
+}
+
+function canonicalThreadType(type) {
+  const text = String(type || "").trim().toLowerCase();
+  if (!text || text === "na") return "other";
+  if (text === "main_process" || /主逻辑进程|main[_\s-]*process/u.test(text)) return "main_process";
+  if (text === "render_process" || /渲染进程|render[_\s-]*process/u.test(text)) return "render_process";
+  if (text === "main" || /主逻辑线程|main/u.test(text)) return "main";
+  if (text === "render" || /渲染线程|render/u.test(text)) return "render";
+  if (text === "other" || /其他线程|other/u.test(text)) return "other";
+  return "other";
 }
 
 function threadEntityKind(thread) {
@@ -444,14 +455,14 @@ function bootstrap(db) {
 function trendResponse(db, query) {
   const featureKey = query.get("featureKey") || buildFeatures(db)[0]?.key;
   const featureMeta = buildFeatures(db).find((item) => item.key === featureKey) || buildFeatures(db)[0];
-  const threadTypes = new Set((query.get("threadTypes") || "main,render,other").split(",").filter(Boolean));
+  const threadTypes = new Set((query.get("threadTypes") || "main,render,other,main_process,render_process").split(",").filter(Boolean).map(canonicalThreadType));
   const filters = Object.fromEntries(["type", "name", "appVersion", "platform", "imageVersion"].map((key) => [key, query.get(key)]).filter(([, value]) => value));
   const scenarios = getBaseScenarios(db, filters).map((scenario) => scenarioFull(db, scenario.id));
   const rows = scenarios.flatMap((scenario) => {
     if (featureMeta.scope !== "thread") {
       return [{ scenarioId: scenario.id, scenarioName: scenario.base.name, platform: scenario.base.platform, value: metricValue(scenario, featureKey) }];
     }
-    return scenario.topdownInfo
+    return allScenarioThreads(scenario)
       .filter((thread) => threadTypes.has(threadCategory(thread)))
       .map((thread) => ({
         scenarioId: scenario.id,
@@ -469,6 +480,20 @@ function trendResponse(db, query) {
     average: validValues.length ? round2(validValues.reduce((sum, value) => sum + value, 0) / validValues.length) : NA,
     rows,
   };
+}
+
+function allScenarioThreads(scenario) {
+  const source = [
+    ...(scenario.topdownInfo || []),
+    ...(scenario.instructionMix || []),
+    ...(scenario.syscallInfo || []),
+    ...(scenario.hotspotInfo?.cycle || []),
+    ...(scenario.hotspotInfo?.fe || []),
+    ...(scenario.hotspotInfo?.be || []),
+  ];
+  return [...new Map(source
+    .filter((thread) => thread?.name)
+    .map((thread) => [`${normalizeThreadKey(thread.name)}:${threadCategory(thread)}`, thread])).values()];
 }
 
 function metricValue(scenario, key, thread) {

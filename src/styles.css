@@ -1082,7 +1082,7 @@ th {
 .thread-type-options {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
 }
 
 .thread-type {
@@ -1095,7 +1095,7 @@ th {
   display: flex;
   gap: 6px;
   min-height: 38px;
-  min-width: 112px;
+  min-width: 0;
   padding: 0 9px;
 }
 
