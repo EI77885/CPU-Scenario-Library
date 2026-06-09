@@ -4,12 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npm run update:data && node server.js",
+    "dev": "npm run import:data && node server.js",
     "generate:data": "node scripts/generate-source-data.js",
-    "trace:summary": "node scripts/update-trace-summary.js",
     "import:data": "node scripts/import-source-data.js",
     "delete:data": "node scripts/delete-data.js",
-    "update:data": "node scripts/update-trace-summary.js && node scripts/import-source-data.js",
+    "update:data": "node scripts/import-source-data.js",
     "setup:data": "node scripts/generate-source-data.js && node scripts/import-source-data.js",
     "start": "node server.js"
   },

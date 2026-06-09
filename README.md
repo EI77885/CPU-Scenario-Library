@@ -1,6 +1,6 @@
 # CPU 场景库后端与前端展示使用说明
 
-本工程用于在目标环境中扫描 `source_data` 目录下的 CPU 场景 Excel 数据和 `hitrace` 解析产物，增量更新本地 SQLite 数据库，并通过本地 Node 服务给前端页面展示。
+本工程用于在目标环境中扫描 `source_data` 目录下的 CPU 场景 Excel 数据和 `hitrace\trace_summary.json` 三视图结构化数据，增量更新本地 SQLite 数据库，并通过本地 Node 服务给前端页面展示。
 
 目标环境假设为 Windows x86。
 
@@ -10,7 +10,6 @@
 
 - `server.js`：本地静态资源服务和 REST API 服务。
 - `scripts/import-source-data.js`：从 `source_data` 增量导入数据库。
-- `scripts/update-trace-summary.js`：从 `hitrace\` 下的原始 trace 生成统一的 `trace_summary.json`。
 - `scripts/generate-source-data.js`：生成示例 `source_data`，仅用于演示或本地测试。
 - `data/cpu_scenario_library.sqlite`：导入后生成的 SQLite 数据库。
 - `source_data/`：目标环境的数据源目录。
@@ -110,7 +109,7 @@ source_data\
 - 频率单位统一使用 `Mhz`，数据库和前端展示都不再转换为 `GHz`。
 - 从 Excel 数据表中提取到的所有数值统一保留两位小数，百分比同样保留两位小数；数据库中保存的是已四舍五入后的数值，前端展示也固定为两位小数。
 
-## 5. 生成 trace_summary.json
+## 5. 准备 trace_summary.json
 
 三视图数据不从 Excel 图片 OCR 获取，而是从每个场景目录下的：
 
@@ -118,38 +117,9 @@ source_data\
 hitrace\trace_summary.json
 ```
 
-读取。目标环境可以先把 Android、systrace 或鸿蒙 trace 原始文件放到对应场景的 `hitrace\` 目录，再执行：
+读取。目标环境不再解析 `hitrace`、`systrace`、Perfetto 或其它原始 trace，也不再由本项目生成 `trace_summary.json`。上游工具需要提前把三视图结果转换为下面的 JSON 结构，并放到对应场景的 `hitrace\` 目录。
 
-```powershell
-node scripts/update-trace-summary.js
-```
-
-也可以使用 npm 脚本：
-
-```powershell
-npm run trace:summary
-```
-
-脚本会扫描 `source_data` 下每个场景的 `hitrace\` 目录，生成或更新 `trace_summary.json`。默认是增量模式：如果 `trace_summary.json` 比原始 trace 新，就跳过；需要强制重算时加 `--force`：
-
-```powershell
-node scripts/update-trace-summary.js --force
-```
-
-支持的输入类型：
-
-- Perfetto / proto 二进制 trace：例如 `.perfetto-trace`、`.pftrace`、`.pb`、`.bin`。这类文件需要目标环境安装 `trace_processor_shell`，或通过 `--trace-processor` 指定路径。
-- systrace / atrace / OpenHarmony HiTrace / ftrace 文本：例如 `.txt`、`.trace`、`.ftrace`、`.atrace`、`.systrace`、`.hitrace`、`.htrace`、`.ohtrace`、`.log`、`.html`。脚本会解析其中的 `sched_switch` 事件。
-- Chrome Trace JSON：例如 `.json`，支持 `traceEvents` / `events` 中的 `X` 或 `B/E` 时长事件。
-- `.gz` 压缩的上述文本或 JSON 文件。
-
-Perfetto 二进制 trace 示例：
-
-```powershell
-node scripts/update-trace-summary.js --trace-processor D:\tools\trace_processor_shell.exe
-```
-
-输出的 `trace_summary.json` 结构为：
+`trace_summary.json` 结构为：
 
 ```json
 {
@@ -161,12 +131,9 @@ node scripts/update-trace-summary.js --trace-processor D:\tools\trace_processor_
 
 注意：
 
-- 默认 CPU cluster 映射为 `CPU0-3=小核`、`CPU4-6=中核`、`CPU7+=大核`。
-- 文本 trace 主要依赖 `sched_switch` 计算 running/idle，占比会根据线程调度时长估算。已兼容 Android/ftrace 常见格式，以及 OpenHarmony HiTrace 中常见的 `prev_comm:...`、`cpu_id=...`、`C02 ... sched_switch` 等写法。
-- 如果鸿蒙 trace 是无法直接读取的私有二进制格式，需要先用对应工具导出为包含 `sched_switch` 的文本，或转换成 Chrome Trace JSON。
 - 进程视图按进程 running 负载降序累计前 80%，剩余归 `other process`；线程视图继承这部分 `other process`，只展开前 80% 进程内的线程，并在这些线程里继续按负载降序累计前 80%，剩余归 `other thread`。
-- Perfetto 二进制 trace 没有 `trace_processor_shell` 时无法直接解析，脚本会记录 failed；其它场景不受影响。
-- 如需发现任何 trace 解析失败就让命令失败，可加 `--strict`。
+- `clusterOverview`、`processOverview`、`threadOverview` 会直接写入负载信息模块的三视图数据表。
+- 如果 `trace_summary.json` 缺失或格式不合法，导入器会记录 warning，并跳过该场景的三视图结构化数据。
 
 ## 6. 增量更新数据库
 
@@ -176,11 +143,13 @@ node scripts/update-trace-summary.js --trace-processor D:\tools\trace_processor_
 node scripts/import-source-data.js
 ```
 
-如果希望一步完成“解析 hitrace 原始 trace -> 更新 `trace_summary.json` -> 增量导入数据库”，可执行：
+也可以使用 npm 脚本：
 
 ```powershell
 npm run update:data
 ```
+
+`npm run update:data` 只会导入已有 Excel 和 `hitrace\trace_summary.json`，不会解析任何原始 trace。
 
 导入结果会写入：
 
@@ -357,16 +326,10 @@ npm start
 
 ## 9. 推荐日常更新流程
 
-目标环境每次有新 Excel 或 trace 解析结果时：
+目标环境每次有新 Excel 或三视图 JSON 结果时：
 
-1. 将新的场景目录放入 `source_data`，或替换已有场景目录下的 `.xlsx` 和 `hitrace\` 原始 trace。
-2. 生成或更新三视图结构化数据：
-
-```powershell
-node scripts/update-trace-summary.js
-```
-
-3. 执行增量导入：
+1. 将新的场景目录放入 `source_data`，或替换已有场景目录下的 `.xlsx` 和 `hitrace\trace_summary.json`。
+2. 执行增量导入：
 
 ```powershell
 node scripts/import-source-data.js
@@ -378,7 +341,7 @@ node scripts/import-source-data.js
 npm run update:data
 ```
 
-4. 如果 `server.js` 已经在运行，刷新浏览器页面即可看到最新数据库数据。
+3. 如果 `server.js` 已经在运行，刷新浏览器页面即可看到最新数据库数据。
 
 可以用 Windows 任务计划程序定时执行导入命令，实现周期性更新数据库。
 
@@ -427,20 +390,6 @@ hitrace\trace_summary.json
 ```
 
 这种情况下导入会继续，但负载三视图结构化数据不会入库。
-
-### Perfetto 二进制 trace 解析失败
-
-`.perfetto-trace`、`.pftrace`、`.pb` 等二进制 trace 需要 `trace_processor_shell`。检查：
-
-```powershell
-trace_processor_shell --version
-```
-
-如果没有加入 `PATH`，可以显式指定：
-
-```powershell
-node scripts/update-trace-summary.js --trace-processor D:\tools\trace_processor_shell.exe
-```
 
 ### 某个 Excel 格式不标准
 
