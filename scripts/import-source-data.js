@@ -987,7 +987,7 @@ function applyHizeeCoordinateLayout(rows, clusterSeen, parsed) {
     const ddrFreqMhz = numericCellOrNull(rows[26]?.[5]);
     if (ddrFreqMhz != null && ddrFreqMhz > 300 && ddrFreqMhz < 10000) parsed.hizee.scene.ddrFreqMhz = round2(ddrFreqMhz);
     const bandwidth = numericCellOrNull(rows[26]?.[6]);
-    if (bandwidth != null && bandwidth > 0 && bandwidth < 1000) parsed.hizee.scene.bandwidth = round2(bandwidth);
+    if (bandwidth != null && bandwidth >= 0 && bandwidth < 1000) parsed.hizee.scene.bandwidth = round2(bandwidth);
     const latency = numericCellOrNull(rows[26]?.[7]);
     if (latency != null && latency > 0 && latency < 10000) parsed.hizee.scene.latency = round2(latency);
   }
