@@ -619,10 +619,18 @@ function safeFilePart(value) {
 }
 
 function inferThreadType(threadName, rank) {
+  const type = inferThreadTypeFromName(threadName);
+  if (type) return type;
+  if (rank === 0) return "main";
+  return "other";
+}
+
+function inferThreadTypeFromName(threadName) {
   const value = clean(threadName).toLowerCase();
   if (value.includes("render") || value.includes("gfx") || value.includes("preview")) return "render";
-  if (rank === 0 || value.includes("main") || value.includes("activity") || value.includes("agent") || value.includes("camera")) return "main";
-  return "other";
+  if (value.includes("worker") || value.includes("workthread") || value.includes("binder") || value.includes("device")) return "other";
+  if (value.includes("main") || value.includes("activity") || value.includes("agent") || value.includes("camera")) return "main";
+  return "";
 }
 
 function canonicalThreadType(value) {
@@ -1253,7 +1261,11 @@ function fixedTopdownThreadName(row, blockIndex) {
 
 function fixedSectionThreadInfo(row, fallbackType) {
   const raw = normalizeRow(row).map(clean).find(Boolean) || `${fallbackType}_thread`;
-  return parseThreadInfo(raw, fallbackType);
+  const parsed = parseThreadInfo(raw);
+  return {
+    name: parsed.name,
+    type: parsed.type || inferThreadTypeFromName(parsed.name) || fallbackType,
+  };
 }
 
 function fixedSectionThreadName(row, fallbackType) {
