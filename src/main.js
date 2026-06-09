@@ -308,7 +308,7 @@ function renderLoadCard(scenario) {
     h("h4", {}, ["Trace 三视图"]),
     clusterStateRows(asArray(loadInfo.clusterRunning)),
     stackedRows(asArray(loadInfo.processRunning), "cluster", "cluster process overview", "累计前 80% 热点进程，其他合并为 other", "process"),
-    stackedRows(asArray(loadInfo.threadRunning), "cluster", "cluster thread overview", "继承 other process；前 80% 进程内线程再聚合 other thread"),
+    stackedRows(asArray(loadInfo.threadRunning), "cluster", "cluster thread overview", "继承idle；只关注主进程，其他进程都记为other process；主进程只展开前80%线程，其它线程计入other thread"),
     h("h4", {}, ["Hizee 指标矩阵"]),
     hizeeTable(asArray(loadInfo.hizeeRows)),
   ]);
@@ -903,20 +903,19 @@ function stackLegend(items) {
 
 function sortStackItems(items) {
   return asArray(items).sort((a, b) => {
-    const aIdle = a.name === "idle";
-    const bIdle = b.name === "idle";
-    if (aIdle && !bIdle) return 1;
-    if (!aIdle && bIdle) return -1;
-    const aOther = isStackOther(a.name);
-    const bOther = isStackOther(b.name);
-    if (aOther && !bOther) return 1;
-    if (!aOther && bOther) return -1;
+    const aPriority = stackItemPriority(a.name);
+    const bPriority = stackItemPriority(b.name);
+    if (aPriority !== bPriority) return aPriority - bPriority;
     return (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0);
   });
 }
 
-function isStackOther(name) {
-  return /^others?$|^other(?:\s+|$)/iu.test(displayText(name));
+function stackItemPriority(name) {
+  const text = displayText(name);
+  if (text === "idle") return 3;
+  if (/^other\s+process$/iu.test(text) || /^other$/iu.test(text) || /^others$/iu.test(text)) return 2;
+  if (/^other\s+thread$/iu.test(text)) return 1;
+  return 0;
 }
 
 function stackColor(name, index) {

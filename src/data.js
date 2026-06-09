@@ -93,15 +93,17 @@ function makeSyscalls(seed) {
 }
 
 function compareStackItems(a, b) {
-  const aIdle = a.name === "idle";
-  const bIdle = b.name === "idle";
-  if (aIdle && !bIdle) return 1;
-  if (!aIdle && bIdle) return -1;
-  const aOther = /^others?$|^other(?:\s+|$)/i.test(a.name);
-  const bOther = /^others?$|^other(?:\s+|$)/i.test(b.name);
-  if (aOther && !bOther) return 1;
-  if (!aOther && bOther) return -1;
+  const aPriority = stackItemPriority(a.name);
+  const bPriority = stackItemPriority(b.name);
+  if (aPriority !== bPriority) return aPriority - bPriority;
   return b.value - a.value;
+}
+
+function stackItemPriority(name) {
+  if (name === "idle") return 3;
+  if (/^other\s+process$/i.test(name) || /^other$/i.test(name) || /^others$/i.test(name)) return 2;
+  if (/^other\s+thread$/i.test(name)) return 1;
+  return 0;
 }
 
 function makeScenario(row, index) {
