@@ -394,7 +394,7 @@ function renderTopdownCard(scenario) {
     cardHeader(scenario),
     ...asArray(scenario.topdownInfo).map((thread, threadIndex) => {
       const body = [
-        threadTitle(thread),
+        topdownThreadTitle(thread),
         metricLegend(),
       ];
       const total = asObject(thread.total);
@@ -892,6 +892,21 @@ function hotspotScoreBadge(dimension, value) {
 
 function threadTitle(thread, suffix = "") {
   return h("h4", {}, [threadDisplayLabel(thread), loadBadge(thread.loadShare), suffix]);
+}
+
+function topdownThreadTitle(thread) {
+  return h("h4", { class: "topdown-thread-title" }, [
+    h("span", { class: "thread-name-text" }, [threadDisplayLabel(thread)]),
+    h("span", { class: "thread-meta-badges" }, [
+      loadBadge(thread.loadShare),
+      kernelShareBadge("内核占比(Inst)", thread.kernelInstShare),
+      kernelShareBadge("内核占比(Cycle)", thread.kernelCycleShare),
+    ]),
+  ]);
+}
+
+function kernelShareBadge(label, value) {
+  return h("span", { class: "kernel-share-badge" }, [`${label} ${displayValue(value, "%")}`]);
 }
 
 function threadDisplayLabel(thread) {

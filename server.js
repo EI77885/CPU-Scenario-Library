@@ -233,6 +233,7 @@ function threadLoadShare(thread) {
 
 function buildTopdown(db, thread) {
   const rows = all(db, "SELECT * FROM topdown_metrics WHERE thread_id = ?", [thread.id]);
+  const meta = db.prepare("SELECT * FROM topdown_thread_meta WHERE thread_id = ?").get(thread.id);
   const valueFor = (scope, metric, level = null) => {
     const row = rows.find((item) => item.scope === scope && item.metric === metric && (level == null || item.level === level));
     return row ? valueAtOrNA(row.value) : NA;
@@ -242,6 +243,8 @@ function buildTopdown(db, thread) {
     name: thread.name,
     threadType: thread.threadType,
     loadShare: threadLoadShare(thread),
+    kernelInstShare: valueOrNA(meta, "kernel_inst_share"),
+    kernelCycleShare: valueOrNA(meta, "kernel_cycle_share"),
     total: { level1: level1("total"), hierarchy: buildHierarchy(rows, valueFor) },
     kernel: { level1: level1("kernel") },
   };

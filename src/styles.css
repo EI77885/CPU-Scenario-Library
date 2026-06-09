@@ -442,6 +442,37 @@ select {
   margin: 0;
 }
 
+.topdown-thread-title {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.thread-name-text {
+  color: #111827;
+}
+
+.thread-meta-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kernel-share-badge {
+  background: #eef6ff;
+  border: 1px solid #cfe2ff;
+  border-radius: 999px;
+  color: #24548f;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 .collapsible-thread > summary,
 .collapsible-hotspot > summary {
   align-items: center;

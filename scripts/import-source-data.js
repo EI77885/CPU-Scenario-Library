@@ -510,6 +510,7 @@ function createSchema(db) {
       latency REAL NOT NULL
     );
     CREATE TABLE IF NOT EXISTS topdown_metrics (thread_id TEXT NOT NULL, scope TEXT NOT NULL, level INTEGER NOT NULL, metric TEXT NOT NULL, parent TEXT NOT NULL, value REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS topdown_thread_meta (thread_id TEXT PRIMARY KEY, kernel_inst_share REAL, kernel_cycle_share REAL);
     CREATE TABLE IF NOT EXISTS instruction_metrics (thread_id TEXT NOT NULL, scope TEXT NOT NULL, event TEXT NOT NULL, value REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_metrics (thread_id TEXT PRIMARY KEY, density REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_top (thread_id TEXT NOT NULL, rank INTEGER NOT NULL, number INTEGER NOT NULL, name TEXT NOT NULL, share REAL NOT NULL);
@@ -528,6 +529,7 @@ function migrateSchema(db) {
   const hotspotThreadColumns = new Set(db.prepare("PRAGMA table_info(hotspot_threads)").all().map((row) => row.name));
   if (!hotspotThreadColumns.has("name")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN name TEXT NOT NULL DEFAULT ''");
   if (!hotspotThreadColumns.has("thread_type")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN thread_type TEXT NOT NULL DEFAULT ''");
+  db.exec("CREATE TABLE IF NOT EXISTS topdown_thread_meta (thread_id TEXT PRIMARY KEY, kernel_inst_share REAL, kernel_cycle_share REAL)");
 }
 
 function resetSchema(db) {
@@ -538,6 +540,7 @@ function resetSchema(db) {
     DROP TABLE IF EXISTS syscall_top;
     DROP TABLE IF EXISTS syscall_metrics;
     DROP TABLE IF EXISTS instruction_metrics;
+    DROP TABLE IF EXISTS topdown_thread_meta;
     DROP TABLE IF EXISTS topdown_metrics;
     DROP TABLE IF EXISTS hizee_scene;
     DROP TABLE IF EXISTS hizee_clusters;
@@ -557,6 +560,7 @@ function deleteScenarioPayload(db, scenarioId) {
   db.prepare("DELETE FROM syscall_top WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM syscall_metrics WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM instruction_metrics WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
+  db.prepare("DELETE FROM topdown_thread_meta WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM topdown_metrics WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   for (const table of ["hizee_scene", "hizee_clusters", "load_thread", "load_process", "load_cluster", "threads"]) {
     db.prepare(`DELETE FROM ${table} WHERE scenario_id = ?`).run(scenarioId);
@@ -588,6 +592,7 @@ function prepareStatements(db) {
     hizeeCluster: db.prepare("INSERT INTO hizee_clusters VALUES (?, ?, ?, ?, ?, ?)"),
     hizeeScene: db.prepare("INSERT INTO hizee_scene VALUES (?, ?, ?, ?, ?)"),
     topdown: db.prepare("INSERT INTO topdown_metrics VALUES (?, ?, ?, ?, ?, ?)"),
+    topdownMeta: db.prepare("INSERT INTO topdown_thread_meta VALUES (?, ?, ?)"),
     instruction: db.prepare("INSERT INTO instruction_metrics VALUES (?, ?, ?, ?)"),
     syscallMetric: db.prepare("INSERT INTO syscall_metrics VALUES (?, ?)"),
     syscallTop: db.prepare("INSERT INTO syscall_top VALUES (?, ?, ?, ?, ?)"),
@@ -765,6 +770,7 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   await importTraceSummary(statements, scenarioId, hitraceDir, warnings);
   importHizeeRows(statements, scenarioId, parsed.hizee);
   for (const row of parsed.topdown) statements.topdown.run(row.threadId, row.scope, row.level, row.metric, row.parent, row.value);
+  for (const row of parsed.topdownMeta) statements.topdownMeta.run(row.threadId, row.kernelInstShare, row.kernelCycleShare);
   for (const row of parsed.instructions) statements.instruction.run(row.threadId, row.scope, row.event, row.value);
   importSyscallRows(statements, parsed.syscalls);
   importHotspotRows(statements, scenarioId, parsed.hotspots, parsed.threads);
@@ -776,6 +782,7 @@ function emptyParsed() {
     threads: new Map(),
     hizee: { clusters: [], scene: { fps: 0, ddrFreqMhz: 0, bandwidth: 0, latency: 0 } },
     topdown: [],
+    topdownMeta: [],
     instructions: [],
     syscalls: [],
     hotspots: [],
@@ -1242,6 +1249,11 @@ function parseFixedTopdownCoordinates(rows, parsed, scenarioId, options = {}) {
     const thread = ensureThread(parsed.threads, scenarioId, threadName, threadType);
     count += parseFixedTopdownRows(rows, blockStart + 1, fixedTopdownTotalRows, thread, "total", parsed);
     count += parseFixedTopdownRows(rows, blockStart + 11, fixedTopdownKernelRows, thread, "kernel", parsed);
+    parsed.topdownMeta.push({
+      threadId: thread.id,
+      kernelInstShare: numericCellOrNull(rows[blockStart + 11]?.[3]),
+      kernelCycleShare: numericCellOrNull(rows[blockStart + 12]?.[3]),
+    });
   });
   return count;
 }
