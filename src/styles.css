@@ -462,6 +462,14 @@ select {
   margin: 0;
 }
 
+.collapsible-hotspot > summary b {
+  color: #9a3412;
+  flex: 1 1 auto;
+  font-size: 12px;
+  line-height: 1.35;
+  min-width: 0;
+}
+
 .collapsible-thread > summary::after,
 .collapsible-hotspot > summary::after {
   background: #eef4ff;
