@@ -626,22 +626,38 @@ function inferThreadType(threadName, rank) {
 }
 
 function canonicalThreadType(value) {
-  const text = clean(value).toLowerCase();
-  if (!text) return "";
+  const raw = clean(value);
+  const text = raw.toLowerCase();
+  if (!raw) return "";
   if (/主逻辑|主线程|main|activity|agent|camera/iu.test(text)) return "main";
   if (/渲染|render|gfx|preview/iu.test(text)) return "render";
   if (/其他|other|worker|binder|device/iu.test(text)) return "other";
+  if (/线程|进程|thread|process/iu.test(raw)) return raw;
   return "";
+}
+
+function threadTypeSegmentFromName(value) {
+  const text = clean(value);
+  const separators = [...text.matchAll(/\s*[-_－—–]\s*/gu)];
+  for (let index = 0; index < separators.length; index += 1) {
+    const separator = separators[index];
+    const segmentStart = separator.index + separator[0].length;
+    const segmentEnd = separators[index + 1]?.index ?? text.length;
+    const segment = clean(text.slice(segmentStart, segmentEnd));
+    const type = canonicalThreadType(segment);
+    if (type) return { name: clean(text.slice(0, separator.index)), type };
+  }
+  return null;
 }
 
 function parseThreadInfo(threadName, threadType = "") {
   const parsedPercent = parseNamedPercent(threadName);
   let name = clean(parsedPercent.name || threadName);
   let type = canonicalThreadType(threadType);
-  const typedMatch = name.match(/^(.*?)\s*[-_－—–]\s*(主逻辑线程|主线程|渲染线程|其他线程|main\s*thread|render\s*thread|other\s*thread|main|render|other)(?:\s*[-_－—–]\s*.*)?$/iu);
-  if (typedMatch) {
-    name = clean(typedMatch[1]);
-    type ||= canonicalThreadType(typedMatch[2]);
+  const typedSegment = threadTypeSegmentFromName(name);
+  if (typedSegment) {
+    name = typedSegment.name;
+    type ||= typedSegment.type;
   }
   name = name
     .replace(/线程\s*[-_－—– ]*(all|kernel|总体|内核).*$/iu, "")

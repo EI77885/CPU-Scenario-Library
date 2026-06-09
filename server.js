@@ -207,6 +207,10 @@ function sameThreadName(a, b) {
   return normalizeThreadKey(a?.name) && normalizeThreadKey(a?.name) === normalizeThreadKey(b?.name);
 }
 
+function threadCategory(thread) {
+  return ["main", "render", "other"].includes(thread?.threadType) ? thread.threadType : "other";
+}
+
 function threadLoadShare(thread) {
   return valueAtOrNA(thread?.loadShare);
 }
@@ -410,7 +414,7 @@ function trendResponse(db, query) {
       return [{ scenarioId: scenario.id, scenarioName: scenario.base.name, platform: scenario.base.platform, value: metricValue(scenario, featureKey) }];
     }
     return scenario.topdownInfo
-      .filter((thread) => threadTypes.has(thread.threadType))
+      .filter((thread) => threadTypes.has(threadCategory(thread)))
       .map((thread) => ({
         scenarioId: scenario.id,
         scenarioName: scenario.base.name,

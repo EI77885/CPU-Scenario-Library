@@ -386,7 +386,7 @@ function renderHotspotDimension(dimension, label, threads) {
     ]),
     h("div", { class: "hotspot-thread-list" }, asArray(threads).map((thread, threadIndex) => {
       const title = [
-        h("b", {}, [`${threadIndex + 1}. `, threadNameLabel(thread.name)]),
+        h("b", {}, [`${threadIndex + 1}. `, threadDisplayLabel(thread)]),
         hotspotScoreBadge(dimension, thread.score),
       ];
       const content = [h("div", { class: "so-list" }, asArray(thread.sos).map((so, soIndex) => h("div", { class: "so-card" }, [
@@ -772,10 +772,12 @@ function findTopdownNodeValue(groups, name) {
 }
 
 function getThreadType(thread) {
-  if (thread?.threadType) return thread.threadType;
-  if (["UnityMain", "MainThread", "ActivityThread", "AiWorker"].includes(thread?.name)) return "main";
-  if (thread?.name === "RenderThread") return "render";
-  return "other";
+  const type = thread?.threadType;
+  return ["main", "render", "other"].includes(type) ? type : "other";
+}
+
+function getThreadDisplayType(thread) {
+  return thread?.threadType || "other";
 }
 
 function cardHeader(scenario) {
@@ -797,7 +799,11 @@ function hotspotScoreBadge(dimension, value) {
 }
 
 function threadTitle(thread, suffix = "") {
-  return h("h4", {}, [threadNameLabel(thread.name), loadBadge(thread.loadShare), suffix]);
+  return h("h4", {}, [threadDisplayLabel(thread), loadBadge(thread.loadShare), suffix]);
+}
+
+function threadDisplayLabel(thread) {
+  return `${threadNameLabel(thread?.name)}-${threadTypeLabel(getThreadDisplayType(thread))}`;
 }
 
 function threadNameLabel(name) {
@@ -806,7 +812,10 @@ function threadNameLabel(name) {
 }
 
 function threadTypeLabel(type) {
-  return { main: "主逻辑线程", render: "渲染线程", other: "其他线程" }[type] || "其他线程";
+  const known = { main: "主逻辑线程", render: "渲染线程", other: "其他线程" };
+  if (known[type]) return known[type];
+  const text = displayText(type);
+  return text && text !== "NA" ? text : "其他线程";
 }
 
 function infoRow(label, value) {
