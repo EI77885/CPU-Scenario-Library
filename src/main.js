@@ -102,11 +102,30 @@ function toFiniteNumber(value) {
 function displayValue(value, suffix = "") {
   const number = toFiniteNumber(value);
   if (number == null) return "NA";
-  const abs = Math.abs(number);
-  const text = abs > 0 && abs < 0.01
-    ? number.toFixed(6).replace(/\.?0+$/u, "")
-    : roundTwo(number).toFixed(2);
+  const text = formatDisplayNumber(number);
   return `${text}${suffix}`;
+}
+
+function formatDisplayNumber(number) {
+  if (Object.is(number, -0) || number === 0) return "0.00";
+  const roundedTwo = roundTwo(number);
+  if (roundedTwo === 0) return formatSignificantNumber(number, 2);
+  return roundedTwo.toFixed(2);
+}
+
+function formatSignificantNumber(number, digits) {
+  const text = number.toPrecision(digits);
+  if (!/e/iu.test(text)) return text;
+  const [mantissa, exponentText] = text.toLowerCase().split("e");
+  const exponent = Number(exponentText);
+  const sign = mantissa.startsWith("-") ? "-" : "";
+  const digitsOnly = mantissa.replace("-", "").replace(".", "");
+  if (exponent >= 0) {
+    const integerLength = exponent + 1;
+    return `${sign}${digitsOnly.padEnd(integerLength, "0")}`;
+  }
+  const zeroCount = Math.max(0, Math.abs(exponent) - 1);
+  return `${sign}0.${"0".repeat(zeroCount)}${digitsOnly}`;
 }
 
 function displayText(value) {

@@ -179,7 +179,7 @@ function round2(value) {
 
 function valueAtOrNA(value) {
   const number = Number(value);
-  return Number.isFinite(number) ? Number(number.toFixed(2)) : NA;
+  return Number.isFinite(number) ? number : NA;
 }
 
 function preciseValueAtOrNA(value) {
