@@ -1816,28 +1816,115 @@ async function importTraceSummary(statements, scenarioId, hitraceDir, warnings) 
     warnings.push(`Missing or invalid trace summary for ${scenarioId}: ${summaryPath} (${error.message})`);
     return;
   }
+  const debug = {
+    keys: Object.keys(summary || {}),
+    cluster: { key: "", rows: 0, inserted: 0, sample: null },
+    process: { key: "", rows: 0, inserted: 0, sample: null },
+    thread: { key: "", rows: 0, inserted: 0, sample: null },
+  };
   safeParse(warnings, scenarioId, "trace cluster overview", () => {
-    for (const row of Array.isArray(summary.clusterOverview) ? summary.clusterOverview : []) {
-      const cluster = clean(row.cluster) || "unknown";
-      const running = boundedNumber(row.running);
-      const idle = row.idle === undefined || row.idle === "" ? boundedNumber(100 - running) : boundedNumber(row.idle);
+    const section = traceSummarySection(summary, ["clusterOverview", "cluster_overview", "clusterLoadOverview", "cluster_load_overview", "loadCluster", "load_cluster", "clusters"]);
+    debug.cluster.key = section.key;
+    debug.cluster.rows = section.rows.length;
+    debug.cluster.sample = section.rows[0] || null;
+    for (const row of section.rows) {
+      const cluster = clean(firstDefined(row, ["cluster", "clusterName", "name", "title", "label"])) || "unknown";
+      const running = boundedNumber(firstDefined(row, ["running", "value", "load", "share", "percent", "usage"]));
+      const rawIdle = firstDefined(row, ["idle", "idleValue", "idlePercent"]);
+      const idle = rawIdle === undefined || rawIdle === "" ? boundedNumber(100 - running) : boundedNumber(rawIdle);
       statements.loadCluster.run(scenarioId, cluster, running, idle);
+      debug.cluster.inserted += 1;
     }
   });
   safeParse(warnings, scenarioId, "trace process overview", () => {
-    for (const row of Array.isArray(summary.processOverview) ? summary.processOverview : []) {
-      const cluster = clean(row.cluster) || "unknown";
-      const items = Array.isArray(row.items) ? row.items : [];
-      items.forEach((item, i) => statements.loadProcess.run(scenarioId, cluster, clean(item.name) || `process_${i + 1}`, boundedNumber(item.value), i + 1));
+    const section = traceSummarySection(summary, ["processOverview", "process_overview", "processLoadOverview", "process_load_overview", "loadProcess", "load_process", "processes"]);
+    debug.process.key = section.key;
+    debug.process.rows = section.rows.length;
+    debug.process.sample = section.rows[0] || null;
+    for (const row of section.rows) {
+      const cluster = clean(firstDefined(row, ["cluster", "clusterName", "name", "title", "label"])) || "unknown";
+      const items = traceSummaryItems(row, ["items", "processes", "processOverview", "data", "children", "values"], "process");
+      items.forEach((item, i) => {
+        statements.loadProcess.run(scenarioId, cluster, clean(item.name) || `process_${i + 1}`, boundedNumber(item.value), i + 1);
+        debug.process.inserted += 1;
+      });
     }
   });
   safeParse(warnings, scenarioId, "trace thread overview", () => {
-    for (const row of Array.isArray(summary.threadOverview) ? summary.threadOverview : []) {
-      const cluster = clean(row.cluster) || "unknown";
-      const items = Array.isArray(row.items) ? row.items : [];
-      items.forEach((item, i) => statements.loadThread.run(scenarioId, cluster, clean(item.name) || `thread_${i + 1}`, boundedNumber(item.value), i + 1));
+    const section = traceSummarySection(summary, ["threadOverview", "thread_overview", "threadLoadOverview", "thread_load_overview", "loadThread", "load_thread", "threads"]);
+    debug.thread.key = section.key;
+    debug.thread.rows = section.rows.length;
+    debug.thread.sample = section.rows[0] || null;
+    for (const row of section.rows) {
+      const cluster = clean(firstDefined(row, ["cluster", "clusterName", "name", "title", "label"])) || "unknown";
+      const items = traceSummaryItems(row, ["items", "threads", "threadOverview", "data", "children", "values"], "thread");
+      items.forEach((item, i) => {
+        statements.loadThread.run(scenarioId, cluster, clean(item.name) || `thread_${i + 1}`, boundedNumber(item.value), i + 1);
+        debug.thread.inserted += 1;
+      });
     }
   });
+  const missing = Object.entries(debug)
+    .filter(([name]) => name !== "keys")
+    .filter(([, item]) => !item.inserted)
+    .map(([name, item]) => `${name}(key=${item.key || "missing"}, rows=${item.rows})`);
+  if (missing.length) warnings.push(`Trace summary imported empty sections for ${scenarioId}: ${missing.join(", ")}; file=${summaryPath}; keys=${debug.keys.join(",") || "none"}`);
+  if (debugMode) console.warn(`[debug] trace summary ${scenarioId}: ${JSON.stringify(debug)}`);
+}
+
+function firstDefined(object, keys) {
+  if (!object || typeof object !== "object") return undefined;
+  for (const key of keys) {
+    if (Object.hasOwn(object, key) && object[key] !== undefined && object[key] !== null) return object[key];
+  }
+  return undefined;
+}
+
+function traceSummarySection(summary, keys) {
+  for (const key of keys) {
+    if (!summary || !Object.hasOwn(summary, key)) continue;
+    return { key, rows: normalizeTraceSummaryRows(summary[key]) };
+  }
+  return { key: "", rows: [] };
+}
+
+function normalizeTraceSummaryRows(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).map(([name, row]) => {
+    if (row && typeof row === "object" && !Array.isArray(row)) return { cluster: name, ...row };
+    if (Array.isArray(row)) return { cluster: name, items: row };
+    return { cluster: name, running: row };
+  });
+}
+
+function traceSummaryItems(row, itemKeys, fallbackPrefix) {
+  const direct = firstDefined(row, itemKeys);
+  const items = normalizeTraceSummaryItems(direct);
+  if (items.length) return items;
+  if (!row || typeof row !== "object") return [];
+  const reserved = new Set(["cluster", "clusterName", "name", "title", "label", "running", "idle", "idleValue", "idlePercent", "value", "load", "share", "percent", "usage"]);
+  return Object.entries(row)
+    .filter(([key, value]) => !reserved.has(key) && (typeof value === "number" || clean(value)))
+    .map(([key, value], index) => traceSummaryItem(value, `${fallbackPrefix}_${index + 1}`, key))
+    .filter((item) => item.name);
+}
+
+function normalizeTraceSummaryItems(value) {
+  if (Array.isArray(value)) return value.map((item, index) => traceSummaryItem(item, `item_${index + 1}`)).filter((item) => item.name);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).map(([name, item]) => traceSummaryItem(item, name)).filter((item) => item.name);
+}
+
+function traceSummaryItem(item, fallbackName, mapKey = "") {
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    return {
+      name: clean(firstDefined(item, ["name", "process", "thread", "label", "title"]) ?? mapKey ?? fallbackName),
+      value: firstDefined(item, ["value", "running", "load", "share", "percent", "usage"]),
+    };
+  }
+  if (Array.isArray(item)) return { name: clean(item[0] ?? mapKey ?? fallbackName), value: item[1] };
+  return { name: clean(mapKey || fallbackName), value: item };
 }
 
 function importHizeeRows(statements, scenarioId, hizee) {
