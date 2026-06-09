@@ -59,19 +59,48 @@ const state = {
 };
 
 const colors = [
-  "#3b82d6",
-  "#22a99a",
-  "#d99a2b",
-  "#d15f70",
-  "#8b75c9",
-  "#2fa8c9",
-  "#8ab846",
-  "#c85b96",
-  "#9a70c4",
-  "#40ad70",
-  "#cf7f36",
-  "#3298c7",
+  "#4f7ec7",
+  "#42a69a",
+  "#d39a36",
+  "#cb6b78",
+  "#8674c4",
+  "#3fa7c8",
+  "#83ad4a",
+  "#c4659a",
+  "#9a76bd",
+  "#4bad73",
+  "#c87f43",
+  "#4397bf",
+  "#b6854b",
+  "#5e86bd",
+  "#6aa86f",
+  "#b96b86",
+  "#6f93c9",
+  "#9b9a4b",
+  "#bd6f62",
+  "#6c86b3",
+  "#58a6ad",
+  "#b58c3f",
+  "#8d82c7",
+  "#55a47e",
+  "#c17774",
+  "#6e9ec1",
+  "#a07ab8",
+  "#7ca458",
+  "#bb7897",
+  "#5c9aa1",
+  "#b47d55",
+  "#7790bd",
 ];
+const fixedStackColors = {
+  running: "#8ee5aa",
+  idle: "#2f3b4d",
+  other: "#6f8095",
+  "other process": "#6f8095",
+  "other thread": "#aab8c8",
+  others: "#6f8095",
+};
+const stackColorMap = buildStackColorMap(scenarios);
 
 function h(tag, attrs = {}, children = []) {
   const el = document.createElement(tag);
@@ -91,6 +120,20 @@ function asArray(value) {
 
 function asObject(value) {
   return value && typeof value === "object" ? value : {};
+}
+
+function buildStackColorMap(sourceScenarios) {
+  const names = new Set();
+  for (const scenario of asArray(sourceScenarios)) {
+    const loadInfo = asObject(scenario.loadInfo);
+    for (const row of [...asArray(loadInfo.processRunning), ...asArray(loadInfo.threadRunning)]) {
+      for (const item of asArray(row.items)) {
+        const key = stackColorKey(item.name);
+        if (key && !fixedStackColors[key]) names.add(key);
+      }
+    }
+  }
+  return new Map([...names].sort().map((name, index) => [name, colors[index % colors.length]]));
 }
 
 function toFiniteNumber(value) {
@@ -951,29 +994,12 @@ function stackItemPriority(name) {
 }
 
 function stackColor(name) {
-  const key = displayText(name).toLocaleLowerCase();
-  const fixed = {
-    running: "#8ee5aa",
-    idle: "#2f3b4d",
-    other: "#6f8095",
-    "other process": "#6f8095",
-    "other thread": "#aab8c8",
-    others: "#6f8095",
-    surfaceflinger: "#3b82d6",
-    system_server: "#d15f70",
-    media_server: "#d99a2b",
-    render_service: "#8b75c9",
-    system_ui: "#2fa8c9",
-    binder: "#c85b96",
-    main_thread: "#3b82d6",
-    render_thread: "#d99a2b",
-    binder_thread: "#d15f70",
-    worker_thread: "#40ad70",
-    io_thread: "#22a99a",
-    jit_thread: "#8b75c9",
-    gpu_worker: "#c85b96",
-  };
-  return fixed[key] || colors[stableColorIndex(key)];
+  const key = stackColorKey(name);
+  return fixedStackColors[key] || stackColorMap.get(key) || colors[stableColorIndex(key)];
+}
+
+function stackColorKey(name) {
+  return displayText(name).toLocaleLowerCase();
 }
 
 function stableColorIndex(value) {
