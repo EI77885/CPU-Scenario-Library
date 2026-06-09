@@ -541,6 +541,10 @@ function renderTrendPage() {
   const visibleTrendRows = trendRows.filter(hasTrendValue);
   const trendValues = visibleTrendRows.map((row) => toFiniteNumber(row.value)).filter((value) => value != null);
   const averageValue = trendValues.length ? roundTwo(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length) : null;
+  const medianValue = median(trendValues);
+  const rangeText = trendValues.length
+    ? `${displayValue(Math.min(...trendValues))} - ${displayValue(Math.max(...trendValues))}`
+    : "NA";
   const snapshotKey = getTrendSnapshotKey(metric, visibleTrendRows);
   const isSaved = state.savedTrends.some((snapshot) => snapshot.key === snapshotKey);
   return h("div", { class: "page-grid" }, [
@@ -571,8 +575,12 @@ function renderTrendPage() {
       h("div", { class: "section-title trend-title" }, [
         h("h2", {}, [`${metric.label} 趋势`]),
         h("div", { class: "trend-summary" }, [
-          h("span", {}, [`平均值：${displayValue(averageValue)}`]),
-          h("span", {}, [`单位：${metric.unit || "-"}`]),
+          h("div", { class: "trend-stat-list" }, [
+            h("span", {}, [`平均值：${displayValue(averageValue)}`]),
+            h("span", {}, [`中位值：${displayValue(medianValue)}`]),
+            h("span", {}, [`取值范围：${rangeText}`]),
+            h("span", {}, [`单位：${metric.unit || "-"}`]),
+          ]),
           h("button", {
             class: isSaved ? "keep-trend saved" : "keep-trend",
             disabled: isSaved,
@@ -1016,6 +1024,13 @@ function stableColorIndex(value) {
 function roundTwo(value) {
   const number = toFiniteNumber(value);
   return number == null ? null : Number(number.toFixed(2));
+}
+
+function median(values) {
+  const sorted = asArray(values).map(toFiniteNumber).filter((value) => value != null).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? roundTwo(sorted[middle]) : roundTwo((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
 function dualMetricBars(total, kernel, unit) {

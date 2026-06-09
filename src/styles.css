@@ -1095,12 +1095,21 @@ th {
 .trend-summary {
   align-items: center;
   display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 260px;
+}
+
+.trend-stat-list {
+  display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
 
-.trend-summary span {
+.trend-stat-list span {
   background: #f1f5f9;
   border: 1px solid #dbe5f0;
   border-radius: 999px;
@@ -1108,6 +1117,7 @@ th {
   font-size: 12px;
   font-weight: 800;
   padding: 5px 9px;
+  white-space: nowrap;
 }
 
 .keep-trend,
