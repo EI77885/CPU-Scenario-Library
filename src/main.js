@@ -58,7 +58,20 @@ const state = {
   savedTrends: [],
 };
 
-const colors = ["#2563eb", "#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#64748b"];
+const colors = [
+  "#2563eb",
+  "#14b8a6",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#06b6d4",
+  "#84cc16",
+  "#ec4899",
+  "#a855f7",
+  "#22c55e",
+  "#f97316",
+  "#0ea5e9",
+];
 
 function h(tag, attrs = {}, children = []) {
   const el = document.createElement(tag);
@@ -886,16 +899,16 @@ function normalizeLoadStackItems(items, kind = "") {
 
 function stackedBar(items) {
   const sortedItems = sortStackItems(items);
-  return h("div", { class: "stacked-bar" }, sortedItems.map((item, index) => h("i", {
+  return h("div", { class: "stacked-bar" }, sortedItems.map((item) => h("i", {
     title: `${displayText(item.name)} ${displayValue(item.value, "%")}`,
-    style: `width:${safePercent(item.value)}%;background:${stackColor(item.name, index)}`,
+    style: `width:${safePercent(item.value)}%;background:${stackColor(item.name)}`,
   }, [safePercent(item.value) >= 14 ? displayValue(item.value, "%") : ""])));
 }
 
 function stackLegend(items) {
   const sortedItems = sortStackItems(items);
-  return h("div", { class: "stack-legend" }, sortedItems.map((item, index) => h("span", {}, [
-    h("i", { style: `background:${stackColor(item.name, index)}` }),
+  return h("div", { class: "stack-legend" }, sortedItems.map((item) => h("span", {}, [
+    h("i", { style: `background:${stackColor(item.name)}` }),
     `${displayText(item.name)}`,
     h("b", {}, [displayValue(item.value, "%")]),
   ])));
@@ -918,7 +931,8 @@ function stackItemPriority(name) {
   return 0;
 }
 
-function stackColor(name, index) {
+function stackColor(name) {
+  const key = displayText(name).toLocaleLowerCase();
   const fixed = {
     running: "#86efac",
     idle: "#334155",
@@ -926,8 +940,27 @@ function stackColor(name, index) {
     "other process": "#64748b",
     "other thread": "#94a3b8",
     others: "#64748b",
+    surfaceflinger: "#2563eb",
+    system_server: "#ef4444",
+    media_server: "#f59e0b",
+    render_service: "#8b5cf6",
+    system_ui: "#06b6d4",
+    binder: "#ec4899",
+    main_thread: "#2563eb",
+    render_thread: "#f59e0b",
+    binder_thread: "#ef4444",
+    worker_thread: "#22c55e",
+    io_thread: "#14b8a6",
+    jit_thread: "#8b5cf6",
+    gpu_worker: "#ec4899",
   };
-  return fixed[name] || colors[index % colors.length];
+  return fixed[key] || colors[stableColorIndex(key)];
+}
+
+function stableColorIndex(value) {
+  let hash = 0;
+  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash % colors.length;
 }
 
 function roundTwo(value) {
