@@ -538,9 +538,10 @@ function renderTrendPage() {
       detail: scenario.base.platform,
       value: getMetricValue(scenario, metric.key, state.threadTypes),
     }))).sort((a, b) => (toFiniteNumber(b.value) ?? -1) - (toFiniteNumber(a.value) ?? -1));
-  const trendValues = trendRows.map((row) => toFiniteNumber(row.value)).filter((value) => value != null);
+  const visibleTrendRows = trendRows.filter(hasTrendValue);
+  const trendValues = visibleTrendRows.map((row) => toFiniteNumber(row.value)).filter((value) => value != null);
   const averageValue = trendValues.length ? roundTwo(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length) : null;
-  const snapshotKey = getTrendSnapshotKey(metric, trendRows);
+  const snapshotKey = getTrendSnapshotKey(metric, visibleTrendRows);
   const isSaved = state.savedTrends.some((snapshot) => snapshot.key === snapshotKey);
   return h("div", { class: "page-grid" }, [
     h("section", { class: "filter-panel trend-control" }, [
@@ -575,13 +576,13 @@ function renderTrendPage() {
           h("button", {
             class: isSaved ? "keep-trend saved" : "keep-trend",
             disabled: isSaved,
-            onclick: () => saveCurrentTrend(metric, trendRows, averageValue, snapshotKey),
+            onclick: () => saveCurrentTrend(metric, visibleTrendRows, averageValue, snapshotKey),
           }, [isSaved ? "已保留" : "保留当前结果"]),
         ]),
       ]),
-      trendChart(trendRows, metric.unit),
+      trendChart(visibleTrendRows, metric.unit),
       isThreadMetric && state.trendCategory === "hotspot"
-        ? miniTable(["场景名称", "线程名", "平台", "线程类型", "来源维度", metric.label], trendRows.map((row) => [
+        ? miniTable(["场景名称", "线程名", "平台", "线程类型", "来源维度", metric.label], visibleTrendRows.map((row) => [
           row.scenario.base.name,
           row.thread.name,
           row.scenario.base.platform,
@@ -590,14 +591,14 @@ function renderTrendPage() {
           displayValue(row.value),
         ]))
         : isThreadMetric
-        ? miniTable(["应用_场景_线程名", "平台", "场景类型", "线程类型", metric.label], trendRows.map((row) => [
+        ? miniTable(["应用_场景_线程名", "平台", "场景类型", "线程类型", metric.label], visibleTrendRows.map((row) => [
           row.label,
           row.scenario.base.platform,
           row.scenario.base.type,
           threadTypeLabel(row.thread.threadType),
           displayValue(row.value),
         ]))
-        : miniTable(["场景名称", "平台", "场景类型", metric.label], trendRows.map((row) => [
+        : miniTable(["场景名称", "平台", "场景类型", metric.label], visibleTrendRows.map((row) => [
           row.label,
           row.scenario.base.platform,
           row.scenario.base.type,
@@ -614,6 +615,10 @@ function getTrendMetricCategory(key) {
   if (key.startsWith("syscall.")) return "syscall";
   if (key.startsWith("hotspot.")) return "hotspot";
   return "load";
+}
+
+function hasTrendValue(row) {
+  return toFiniteNumber(row?.value) != null;
 }
 
 function getHotspotDimensionLabel(key) {
@@ -1165,7 +1170,7 @@ function instructionTable(thread) {
 }
 
 function trendChart(rows, unit, compact = false) {
-  const safeRows = asArray(rows);
+  const safeRows = asArray(rows).filter(hasTrendValue);
   const max = Math.max(...safeRows.map((row) => toFiniteNumber(row.value) || 0), 1);
   return h("div", { class: compact ? "trend-chart trend-chart-compact" : "trend-chart" }, safeRows.map((row, index) => h("div", { class: "trend-item" }, [
     h("div", { class: "trend-label" }, [
