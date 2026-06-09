@@ -98,6 +98,9 @@ function scenarioFull(db, scenarioId) {
     loadShare: round2(row.load_share),
   }));
   const displayThreads = threads.length ? threads : defaultDisplayThreads(scenarioId, scenario.base.name);
+  const topdownThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "topdown_metrics", displayThreads) : displayThreads;
+  const instructionThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "instruction_metrics", displayThreads) : displayThreads;
+  const syscallThreads = scenario.base.type === "冷启动" ? threadsWithRows(db, "syscall_metrics", displayThreads) : displayThreads;
   const hizeeScene = db.prepare("SELECT * FROM hizee_scene WHERE scenario_id = ?").get(scenarioId) || {};
   const hizeeClusters = all(db, "SELECT * FROM hizee_clusters WHERE scenario_id = ? ORDER BY rowid", [scenarioId]);
   return {
@@ -120,15 +123,19 @@ function scenarioFull(db, scenarioId) {
         latency: valueOrNA(hizeeScene, "latency"),
       })),
     },
-    topdownInfo: displayThreads.map((thread) => buildTopdown(db, thread)),
-    instructionMix: displayThreads.map((thread) => buildInstruction(db, thread)),
-    syscallInfo: displayThreads.map((thread) => buildSyscall(db, thread)),
+    topdownInfo: topdownThreads.map((thread) => buildTopdown(db, thread)),
+    instructionMix: instructionThreads.map((thread) => buildInstruction(db, thread)),
+    syscallInfo: syscallThreads.map((thread) => buildSyscall(db, thread)),
     hotspotInfo: {
       cycle: buildHotspots(db, scenarioId, "cycle", displayThreads),
       fe: buildHotspots(db, scenarioId, "fe", displayThreads),
       be: buildHotspots(db, scenarioId, "be", displayThreads),
     },
   };
+}
+
+function threadsWithRows(db, table, threads) {
+  return threads.filter((thread) => db.prepare(`SELECT 1 FROM ${table} WHERE thread_id = ? LIMIT 1`).get(thread.id));
 }
 
 function defaultDisplayThreads(scenarioId, scenarioName) {
@@ -204,11 +211,17 @@ function normalizeThreadKey(name) {
 }
 
 function sameThreadName(a, b) {
-  return normalizeThreadKey(a?.name) && normalizeThreadKey(a?.name) === normalizeThreadKey(b?.name);
+  return normalizeThreadKey(a?.name)
+    && normalizeThreadKey(a?.name) === normalizeThreadKey(b?.name)
+    && threadEntityKind(a) === threadEntityKind(b);
 }
 
 function threadCategory(thread) {
   return ["main", "render", "other"].includes(thread?.threadType) ? thread.threadType : "other";
+}
+
+function threadEntityKind(thread) {
+  return /进程|process/iu.test(thread?.threadType || "") ? "process" : "thread";
 }
 
 function threadLoadShare(thread) {

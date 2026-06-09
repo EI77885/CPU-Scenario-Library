@@ -748,7 +748,7 @@ function hotspotValueInThread(thread, kind, targetName) {
 
 function sameThread(a, b) {
   const aKey = normalizeThreadKey(a?.name);
-  return !!aKey && aKey === normalizeThreadKey(b?.name);
+  return !!aKey && aKey === normalizeThreadKey(b?.name) && threadEntityKind(a) === threadEntityKind(b);
 }
 
 function normalizeThreadKey(name) {
@@ -758,6 +758,10 @@ function normalizeThreadKey(name) {
     .replace(/线程$/u, "")
     .replace(/\s+/gu, " ")
     .toLocaleLowerCase();
+}
+
+function threadEntityKind(thread) {
+  return /进程|process/iu.test(thread?.threadType || "") ? "process" : "thread";
 }
 
 function findTopdownNodeValue(groups, name) {
