@@ -1547,8 +1547,8 @@ function parseFixedHotspotCoordinates(rows, parsed, scenarioId) {
       parsed.hotspots.push({
         dimension: block.dimension,
         threadId: thread.id,
-        threadName: record.threadName,
-        threadType: record.threadType,
+        threadName: thread.name,
+        threadType: thread.type,
         threadRank: record.threadRank,
         threadScore: record.threadScore,
         soName: record.soName,
@@ -1992,9 +1992,9 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
   for (const row of hotspots) {
     const thread = [...threadMap.values()].find((item) => item.id === row.threadId);
     if (!thread || !row.soName || !row.functionName) continue;
-    const parsedThread = parseThreadInfo(row.threadName || thread.name, row.threadType || thread.type);
+    const parsedThread = parseThreadInfo(row.threadName || thread.name, thread.type || row.threadType);
     const threadName = parsedThread.name || thread.name;
-    const threadType = parsedThread.type || inferThreadType(threadName, 0);
+    const threadType = parsedThread.type || thread.type || inferThreadType(threadName, 0);
     const slotRank = Number(row.threadRank);
     const groupKey = Number.isInteger(slotRank) && slotRank > 0
       ? `${row.dimension}:slot:${slotRank}`
