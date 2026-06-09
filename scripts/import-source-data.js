@@ -698,16 +698,22 @@ function ensureThread(threadMap, scenarioId, threadName, threadType, loadShare =
   const parsed = parseThreadInfo(threadName, threadType);
   const name = parsed.name;
   const type = parsed.type || clean(threadType) || inferThreadType(name, threadMap.size);
+  const normalizedLoadShare = threadLoadShareFrom(loadShare);
   const key = `${threadEntityKind(type)}:${normalizeThreadKey(name)}`;
   const existing = threadMap.get(key);
   if (existing) {
     if (type && (!existing.type || existing.type === "other")) existing.type = type;
-    if (loadShare && !existing.loadShare) existing.loadShare = round2(loadShare);
+    if (normalizedLoadShare && (!existing.loadShare || normalizedLoadShare > existing.loadShare)) existing.loadShare = normalizedLoadShare;
     return existing;
   }
-  const thread = { id: threadId(scenarioId, name, type), name, type, loadShare: round2(loadShare), rank: threadMap.size + 1 };
+  const thread = { id: threadId(scenarioId, name, type), name, type, loadShare: normalizedLoadShare, rank: threadMap.size + 1 };
   threadMap.set(key, thread);
   return thread;
+}
+
+function threadLoadShareFrom(value) {
+  if (typeof value === "number" && value > 0 && value <= 1) return round2(value * 100);
+  return boundedNumber(value);
 }
 
 async function importScenario(db, statements, sourceInfo, warnings) {
