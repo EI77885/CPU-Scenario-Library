@@ -629,7 +629,7 @@ function canonicalThreadType(value) {
   const raw = clean(value);
   const text = raw.toLowerCase();
   if (!raw) return "";
-  if (/进程|process/iu.test(raw)) {
+  if (/进程|\bprocess\b/iu.test(raw)) {
     if (/主逻辑|主进程|main|activity|agent|camera/iu.test(text)) return "主逻辑进程";
     if (/渲染|render|gfx|preview/iu.test(text)) return "渲染进程";
     if (/其他|other|worker|binder|device/iu.test(text)) return "其他进程";
@@ -637,13 +637,13 @@ function canonicalThreadType(value) {
   if (/主逻辑|主线程|main|activity|agent|camera/iu.test(text)) return "main";
   if (/渲染|render|gfx|preview/iu.test(text)) return "render";
   if (/其他|other|worker|binder|device/iu.test(text)) return "other";
-  if (/线程|进程|thread|process/iu.test(raw)) return raw;
+  if (/线程|进程|\bthread\b|\bprocess\b/iu.test(raw)) return raw;
   return "";
 }
 
 function threadTypeSegmentFromName(value) {
   const text = clean(value);
-  const separators = [...text.matchAll(/\s*[-_－—–]\s*/gu)];
+  const separators = [...text.matchAll(/\s*[-－—–]\s*/gu)];
   for (let index = 0; index < separators.length; index += 1) {
     const separator = separators[index];
     const segmentStart = separator.index + separator[0].length;
