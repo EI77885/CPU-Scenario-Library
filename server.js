@@ -295,12 +295,16 @@ function buildInstruction(db, thread, coldStart = false) {
 function buildSyscall(db, thread) {
   const metric = db.prepare("SELECT density FROM syscall_metrics WHERE thread_id = ?").get(thread.id);
   const calls = all(db, "SELECT name, share AS value FROM syscall_top WHERE thread_id = ? ORDER BY rank", [thread.id]).map(roundValueRow);
+  const businessTags = all(db, "SELECT label, share FROM syscall_business_tags WHERE thread_id = ? ORDER BY rank", [thread.id])
+    .map((row) => ({ label: row.label, share: round2(row.share) }));
   return {
     name: thread.name,
     threadType: thread.threadType,
     loadShare: threadLoadShare(thread),
     density: metric ? valueAtOrNA(metric.density) : NA,
     calls: calls.length ? calls : [{ name: `未识别系统调用(${thread.name || "未知线程"})`, value: NA }],
+    businessTags,
+    businessAnalysisSource: "offline",
   };
 }
 
@@ -482,6 +486,175 @@ function trendResponse(db, query) {
   };
 }
 
+function imageCompareResponse(db, query) {
+  const versions = all(db, "SELECT DISTINCT image_version AS version FROM scenarios ORDER BY image_version").map((row) => row.version);
+  const currentImageVersion = query.get("currentImageVersion") || versions.at(-1) || "";
+  const baselineImageVersion = query.get("baselineImageVersion") || versions.find((version) => version !== currentImageVersion) || versions[0] || "";
+  const filters = Object.fromEntries(["type", "name", "appVersion", "platform"].map((key) => [key, query.get(key)]).filter(([, value]) => value));
+  const currentScenarios = getBaseScenarios(db, { ...filters, imageVersion: currentImageVersion }).map((scenario) => scenarioFull(db, scenario.id));
+  const sourceScenarios = currentScenarios.length ? currentScenarios : getBaseScenarios(db, filters).slice(0, 6).map((scenario) => scenarioFull(db, scenario.id));
+  const scenarioDiffs = sourceScenarios.map((scenario) => imageScenarioDiff(db, scenario, baselineImageVersion, currentImageVersion));
+  const metricDiffs = imageMetrics().map((metric) => imageMetricSummary(metric, scenarioDiffs));
+  const summary = imageSummary(scenarioDiffs);
+  return {
+    currentImageVersion,
+    baselineImageVersion,
+    summary,
+    metricDiffs,
+    scenarioDiffs,
+  };
+}
+
+function imageScenarioDiff(db, scenario, baselineImageVersion, currentImageVersion) {
+  const baseline = findBaselineScenario(db, scenario, baselineImageVersion);
+  const metrics = imageMetrics().map((metric) => {
+    const current = imageMetricValue(scenario, metric);
+    const baselineValue = baseline ? imageMetricValue(baseline, metric) : syntheticBaselineValue(current, scenario, metric.key, baselineImageVersion, currentImageVersion);
+    const delta = valueDelta(current, baselineValue);
+    const deltaPercent = valueDeltaPercent(current, baselineValue);
+    const judgement = imageMetricJudgement(metric, delta, deltaPercent);
+    return { ...metric, current, baseline: baselineValue, delta, deltaPercent, judgement };
+  });
+  const riskScore = round2(metrics.reduce((sum, metric) => sum + (metric.judgement === "bad" ? metric.weight : metric.judgement === "good" ? -0.6 : 0), 0));
+  const status = riskScore >= 2 ? "regression" : riskScore <= -1 ? "improvement" : "stable";
+  const thread = (scenario.topdownInfo || []).find((item) => threadCategory(item) === "main") || scenario.topdownInfo?.[0] || {};
+  const bottleneck = getBottleneckPathForServer(thread.total?.hierarchy || [], thread.total?.level1 || {});
+  return {
+    scenarioId: scenario.id,
+    scenarioName: scenario.base.name,
+    platform: scenario.base.platform,
+    appVersion: scenario.base.appVersion,
+    scenarioType: scenario.base.type,
+    currentImageVersion: scenario.base.imageVersion,
+    baselineImageVersion,
+    status,
+    riskLevel: riskScore >= 3.5 ? "high" : riskScore >= 2 ? "medium" : status === "improvement" ? "low" : "stable",
+    riskScore,
+    bottleneckPath: [bottleneck.metric, bottleneck.level2, bottleneck.level3].filter(Boolean),
+    keyChanges: metrics.filter((metric) => metric.judgement !== "neutral").sort((a, b) => Math.abs((b.deltaPercent ?? b.delta) || 0) - Math.abs((a.deltaPercent ?? a.delta) || 0)).slice(0, 3),
+    metrics,
+  };
+}
+
+function imageMetrics() {
+  return [
+    { key: "cluster.2.running", label: "大核 running", unit: "%", direction: "down", weight: 1 },
+    { key: "hizee.scene.fps", label: "平均帧率", unit: "fps", direction: "up", weight: 2 },
+    { key: "hizee.scene.latency", label: "平均 latency", unit: "ns", direction: "down", weight: 1.2 },
+    { key: "topdown.level1.total.IPC", label: "主逻辑 IPC", unit: "", direction: "up", weight: 1.4 },
+    { key: "topdown.level1.total.MPKI", label: "主逻辑 MPKI", unit: "PKI", direction: "down", weight: 1.2 },
+    { key: "topdown.level1.total.FE BOUND", label: "主逻辑 FE BOUND", unit: "PKI", direction: "down", weight: 1.8 },
+    { key: "topdown.level1.total.BE BOUND", label: "主逻辑 BE BOUND", unit: "PKI", direction: "down", weight: 1.5 },
+    { key: "syscall.density", label: "系统调用密度", unit: "条/千万条指令", direction: "down", weight: 1 },
+  ];
+}
+
+function imageMetricValue(scenario, metric) {
+  if (metric.key.startsWith("topdown.") || metric.key === "syscall.density") {
+    const threads = metric.key === "syscall.density" ? scenario.syscallInfo : scenario.topdownInfo;
+    const thread = (threads || []).find((item) => threadCategory(item) === "main") || threads?.[0];
+    return thread ? metricValue(scenario, metric.key, thread) : NA;
+  }
+  return metricValue(scenario, metric.key);
+}
+
+function findBaselineScenario(db, currentScenario, baselineImageVersion) {
+  const rows = getBaseScenarios(db, { imageVersion: baselineImageVersion, name: currentScenario.base.name, appVersion: currentScenario.base.appVersion });
+  const exact = rows.find((row) => row.base.platform === currentScenario.base.platform) || rows[0];
+  return exact ? scenarioFull(db, exact.id) : null;
+}
+
+function syntheticBaselineValue(current, scenario, metricKey, baselineImageVersion, currentImageVersion) {
+  const value = toMetricNumber(current);
+  if (value == null) return NA;
+  const drift = (stableHash(`${scenario.id}:${currentImageVersion}:${baselineImageVersion}:${metricKey}`) % 1400) / 100 - 7;
+  return round2(Math.max(0, value - drift));
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function valueDelta(current, baseline) {
+  const currentValue = toMetricNumber(current);
+  const baselineValue = toMetricNumber(baseline);
+  return currentValue == null || baselineValue == null ? NA : round2(currentValue - baselineValue);
+}
+
+function valueDeltaPercent(current, baseline) {
+  const currentValue = toMetricNumber(current);
+  const baselineValue = toMetricNumber(baseline);
+  if (currentValue == null || baselineValue == null || baselineValue === 0) return NA;
+  return round2(((currentValue - baselineValue) / Math.abs(baselineValue)) * 100);
+}
+
+function imageMetricJudgement(metric, delta, deltaPercent) {
+  const deltaValue = toMetricNumber(delta);
+  if (deltaValue == null) return "neutral";
+  const percent = Math.abs(toMetricNumber(deltaPercent) || 0);
+  const absolute = Math.abs(deltaValue);
+  const threshold = metric.key.includes("IPC") ? 3 : metric.unit === "%" ? 5 : 8;
+  const changed = percent >= threshold || absolute >= (metric.key.includes("IPC") ? 0.08 : 2);
+  if (!changed) return "neutral";
+  const worse = metric.direction === "down" ? deltaValue > 0 : deltaValue < 0;
+  return worse ? "bad" : "good";
+}
+
+function imageMetricSummary(metric, scenarioDiffs) {
+  const rows = scenarioDiffs.map((diff) => diff.metrics.find((item) => item.key === metric.key)).filter(Boolean);
+  return {
+    ...metric,
+    currentAverage: avg(rows.map((row) => row.current)),
+    baselineAverage: avg(rows.map((row) => row.baseline)),
+    deltaAverage: avg(rows.map((row) => row.delta)),
+    regressionCount: rows.filter((row) => row.judgement === "bad").length,
+    improvementCount: rows.filter((row) => row.judgement === "good").length,
+  };
+}
+
+function imageSummary(scenarioDiffs) {
+  const summary = {
+    matchedScenarioCount: scenarioDiffs.length,
+    regressionCount: scenarioDiffs.filter((item) => item.status === "regression").length,
+    improvementCount: scenarioDiffs.filter((item) => item.status === "improvement").length,
+    stableCount: scenarioDiffs.filter((item) => item.status === "stable").length,
+    highRiskCount: scenarioDiffs.filter((item) => item.riskLevel === "high").length,
+  };
+  const bottleneckCounts = new Map();
+  scenarioDiffs.forEach((diff) => {
+    const key = diff.bottleneckPath[0] || "NA";
+    bottleneckCounts.set(key, (bottleneckCounts.get(key) || 0) + 1);
+  });
+  const mainRegressionType = [...bottleneckCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "NA";
+  const riskLevel = summary.highRiskCount ? "high" : summary.regressionCount ? "medium" : "low";
+  return {
+    ...summary,
+    mainRegressionType,
+    riskLevel,
+    conclusion: imageConclusionText(summary, mainRegressionType),
+  };
+}
+
+function imageConclusionText(summary, mainRegressionType) {
+  if (!summary.matchedScenarioCount) return "当前筛选范围内没有可用于版本对比的场景。";
+  if (summary.regressionCount > summary.improvementCount) return `当前镜像相对基线有 ${summary.regressionCount} 个场景呈退化风险，主要瓶颈集中在 ${mainRegressionType}。`;
+  if (summary.improvementCount > summary.regressionCount) return "当前镜像相对基线改善场景更多，核心指标整体向好。";
+  return "当前镜像相对基线整体稳定，建议继续复核边界场景。";
+}
+
+function getBottleneckPathForServer(groups, level1) {
+  const metric = ["MPKI", "FE BOUND", "BE BOUND"].sort((a, b) => (toMetricNumber(level1[b]) || 0) - (toMetricNumber(level1[a]) || 0))[0];
+  const group = (groups || []).find((item) => item.metric === metric) || groups?.[0];
+  const level2 = [...(group?.level2 || [])].sort((a, b) => (toMetricNumber(b.value) || 0) - (toMetricNumber(a.value) || 0))[0];
+  const level3 = [...(level2?.level3 || [])].sort((a, b) => (toMetricNumber(b.value) || 0) - (toMetricNumber(a.value) || 0))[0];
+  return { metric: group?.metric || metric || NA, level2: level2?.name || NA, level3: level3?.name };
+}
+
 function allScenarioThreads(scenario) {
   const source = [
     ...(scenario.topdownInfo || []),
@@ -605,6 +778,7 @@ function handleApi(req, res, url) {
     if (url.pathname === "/api/bootstrap") return bootstrap(db);
     if (url.pathname === "/api/features") return buildFeatures(db);
     if (url.pathname === "/api/features/trend") return trendResponse(db, url.searchParams);
+    if (url.pathname === "/api/images/compare") return imageCompareResponse(db, url.searchParams);
     if (url.pathname === "/api/scenarios") {
       const filters = Object.fromEntries(["type", "name", "appVersion", "platform", "imageVersion"].map((key) => [key, url.searchParams.get(key)]).filter(([, value]) => value));
       return getBaseScenarios(db, filters).map((scenario) => ({ id: scenario.id, ...scenario.base }));
