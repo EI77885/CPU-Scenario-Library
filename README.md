@@ -1,6 +1,6 @@
 # CPU 场景库后端与前端展示使用说明
 
-本工程用于在目标环境中扫描 `source_data` 目录下的 CPU 场景 Excel 数据和 `hitrace\trace_summary.json` 三视图结构化数据，增量更新本地 SQLite 数据库，并通过本地 Node 服务给前端页面展示。
+本工程用于递归扫描指定目录下的 CPU 场景 Excel 数据和 `trace_summary.json` 三视图结构化数据，增量更新本地 SQLite 数据库，并通过本地 Node 服务给前端页面展示。数据目录既可以是工程内的 `source_data`，也可以是任意外部绝对路径。
 
 目标环境假设为 Windows x86。
 
@@ -9,7 +9,7 @@
 核心文件：
 
 - `server.js`：本地静态资源服务和 REST API 服务。
-- `scripts/import-source-data.js`：从 `source_data` 增量导入数据库。
+- `scripts/import-source-data.js`：从默认或指定目录递归发现并增量导入数据。
 - `scripts/generate-source-data.js`：生成示例 `source_data`，仅用于演示或本地测试。
 - `data/cpu_scenario_library.sqlite`：导入后生成的 SQLite 数据库。
 - `source_data/`：目标环境的数据源目录。
@@ -73,15 +73,15 @@ cpu-scenario-library\
 
 其中 `data\` 可以不存在，导入数据库时会自动创建。
 
-## 4. 准备 source_data 数据源
+## 4. 准备数据源
 
-数据源目录固定为工程根目录下的 `source_data`：
+未传 `--source` 时，默认读取工程根目录下的 `source_data`：
 
 ```text
 D:\cpu-scenario-library\source_data
 ```
 
-推荐目录结构：
+下面的结构可以继续使用，但不再强制：
 
 ```text
 source_data\
@@ -97,13 +97,14 @@ source_data\
         trace_summary.json
 ```
 
-要求：
+发现与配对规则：
 
-- 分类目录使用 `01_game`、`02_app`、`03_coldstart`、`04_AIandAgent`、`05_camera`。
-- 场景目录名称作为场景唯一名称的一部分，例如 `wzry_replay`。
-- 每个场景目录下需要有一个以 `CPU测试场景库分析` 开头的 `.xlsx` 文件。
-- 每个场景目录下需要有同级 `hitrace\` 目录。
-- `hitrace\trace_summary.json` 用于提供负载三视图结构化数据；该文件名不绑定具体 trace 来源，后续 Android 或鸿蒙 trace 解析器只要输出同结构 JSON 即可接入。如果暂时缺失，导入器会记录 warning，并跳过该场景的三视图数据。
+- 导入器会从数据根目录开始递归扫描，目录可位于工程之外，层级和目录名不限。
+- Excel 文件名必须以 `CPU测试场景库分析` 开头并以 `.xlsx` 结尾；`~$` 开头的临时文件会被忽略。
+- 每个待导入场景必须同时具备一个 Excel 和一个 `trace_summary.json`。平台、镜像版本、场景类型、场景名称、应用版本等业务字段均从 Excel 读取，不依赖目录名。
+- `trace_summary.json` 会分配给其路径上最近的 Excel 所在目录。一个 summary 不会分给多个 Excel，一个 Excel 也不能对应多个 summary。
+- 缺少配对文件，或同一最近目录存在多个 Excel/summary 导致对应关系不唯一时，该场景会被跳过并打印包含完整路径的 warning，避免把错误数据写入网页数据库。
+- 推荐仍将 `trace_summary.json` 放在 Excel 所在目录下的 `hitrace\` 子目录中，但 `hitrace` 名称和固定层级不再是识别前提。
 - 目标环境 Excel 只有一个 sheet 页也可以。导入器会按关键词识别基础信息、负载信息、TOPDOWN、指令分布、系统调用、热点 SO/函数等分段。
 - 示例数据源的单 sheet 布局按目标表截图组织：顶部基础信息、负载三视图区域、Hizee 表、横向 TOPDOWN 块、指令分布、系统调用、热点/Bound SO 与函数三层树，并包含合并单元格。导入器会读取 `.xlsx` 的 `mergeCells`，将合并区域左上角文本作为上下文继承，避免合并单元格导致线程名、SO 名或分段标题丢失。
 - 频率单位统一使用 `Mhz`，数据库和前端展示都不再转换为 `GHz`。
@@ -111,13 +112,13 @@ source_data\
 
 ## 5. 准备 trace_summary.json
 
-三视图数据不从 Excel 图片 OCR 获取，而是从每个场景目录下的：
+三视图数据不从 Excel 图片 OCR 获取，而是从与 Excel 一对一配对的：
 
 ```text
 hitrace\trace_summary.json
 ```
 
-读取。目标环境不再解析 `hitrace`、`systrace`、Perfetto 或其它原始 trace，也不再由本项目生成 `trace_summary.json`。上游工具需要提前把三视图结果转换为下面的 JSON 结构，并放到对应场景的 `hitrace\` 目录。
+读取。目标环境不再解析 `hitrace`、`systrace`、Perfetto 或其它原始 trace，也不再由本项目生成 `trace_summary.json`。上游工具需要提前把三视图结果转换为下面的 JSON 结构。文件可以位于任意子目录，但建议继续放在该场景 Excel 同目录下的 `hitrace\` 中。
 
 `trace_summary.json` 结构为：
 
@@ -133,7 +134,7 @@ hitrace\trace_summary.json
 
 - 进程视图按进程 running 负载降序累计前 80%，剩余归 `other process`；线程视图继承这部分 `other process`，只展开前 80% 进程内的线程，并在这些线程里继续按负载降序累计前 80%，剩余归 `other thread`。
 - `clusterOverview`、`processOverview`、`threadOverview` 会直接写入负载信息模块的三视图数据表。
-- 如果 `trace_summary.json` 缺失或格式不合法，导入器会记录 warning，并跳过该场景的三视图结构化数据。
+- 如果 `trace_summary.json` 缺失、无法与 Excel 唯一配对或格式不合法，导入器会记录 warning，并跳过该场景。
 
 ## 6. 增量更新数据库
 
@@ -157,18 +158,24 @@ npm run update:data
 D:\cpu-scenario-library\data\cpu_scenario_library.sqlite
 ```
 
-如需指定数据源目录或数据库文件：
+如需指定工程外的任意数据根目录或数据库文件：
 
 ```powershell
 node scripts/import-source-data.js --source D:\cpu-scenario-library\source_data --db D:\cpu-scenario-library\data\cpu_scenario_library.sqlite
+```
+
+也可以通过 npm 传递参数，注意保留中间的 `--`：
+
+```powershell
+npm run update:data -- --source D:\cpu-data-archive
 ```
 
 增量导入规则：
 
 - 新增场景会插入数据库。
 - 已存在场景会更新主表，并清理后重写该场景的子表数据。
-- 未出现在本次 `source_data` 中的旧场景会保留。
-- 场景唯一 ID 由“分类目录 + 场景目录名”生成，例如 `01_game-wzry_replay`。
+- 未出现在本次扫描目录中的旧场景会保留。
+- 旧版标准 `source_data\分类\场景` 结构继续沿用原场景 ID；其它目录结构的场景 ID 由 Excel 中的“平台 + 镜像版本 + 场景类型 + 场景名称”生成，保证同场景的不同平台或镜像版本可以同时入库。
 - 导入时会对 Excel 中解析出的数值做两位小数规整，包括负载占比、Hizee 数据、PMU、系统调用占比和热点 SO/函数占比。
 - 默认使用宽松导入模式：单个场景或单个分段解析失败时会记录 warning，并继续导入其它可识别数据。
 - 单个场景失败不会回滚其它场景，导入结果会显示 `已导入场景数/发现的场景数`。
@@ -328,17 +335,17 @@ npm start
 
 目标环境每次有新 Excel 或三视图 JSON 结果时：
 
-1. 将新的场景目录放入 `source_data`，或替换已有场景目录下的 `.xlsx` 和 `hitrace\trace_summary.json`。
+1. 将新的 Excel 与对应 `trace_summary.json` 放入默认 `source_data` 或任意外部数据目录。
 2. 执行增量导入：
 
 ```powershell
-node scripts/import-source-data.js
+node scripts/import-source-data.js --source D:\cpu-data-archive
 ```
 
 也可以直接使用组合命令：
 
 ```powershell
-npm run update:data
+npm run update:data -- --source D:\cpu-data-archive
 ```
 
 3. 如果 `server.js` 已经在运行，刷新浏览器页面即可看到最新数据库数据。

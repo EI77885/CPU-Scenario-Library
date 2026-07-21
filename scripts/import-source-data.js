@@ -6,6 +6,7 @@ import ExcelJS from "exceljs";
 import Worksheet from "exceljs/lib/doc/worksheet.js";
 import {
   categoryDirs,
+  classifySyscallBusinessTags,
   clusters,
   instructionEvents,
   normalizeMetricName,
@@ -147,12 +148,13 @@ function patchExcelJsMergeHandling() {
 
 function usage() {
   console.log(`Usage:
-  node scripts/import-source-data.js [--source <source_data>] [--db <path>] [--reset|--full] [--strict]
+  node scripts/import-source-data.js [--source <data-root>] [--db <path>] [--reset|--full] [--strict]
   node scripts/import-source-data.js --debug
 
 Examples:
   node scripts/import-source-data.js
   node scripts/import-source-data.js --source D:\\cpu-scenario-library\\source_data
+  node scripts/import-source-data.js --source D:\\cpu-data-archive
   node scripts/import-source-data.js --db D:\\cpu-scenario-library\\data\\cpu_scenario_library.sqlite
   node scripts/import-source-data.js --reset --strict`);
 }
@@ -388,7 +390,7 @@ function sixSheetBaseObject(rows, fallbackType, xlsxPath) {
   const dirName = path.basename(path.dirname(xlsxPath));
   const name = appAwareScenarioName(map.get("游戏/应用名称") || map.get("游戏名称") || map.get("应用名称"), map.get("场景名称"), dirName);
   return {
-    type: fallbackType || map.get("场景类型"),
+    type: map.get("场景类型") || fallbackType,
     name,
     appVersion: map.get("游戏/应用版本号") || "unknown",
     description: map.get("场景描述") || dirName,
@@ -400,15 +402,22 @@ function sixSheetBaseObject(rows, fallbackType, xlsxPath) {
 }
 
 function baseObject(workbook, sourceInfo) {
-  if (workbook.sheets.length >= 6 && workbook.byRole.base[0]?.[0] === "字段") {
-    return sixSheetBaseObject(workbook.byRole.base, sourceInfo.type, sourceInfo.xlsxPath);
-  }
-  return oneSheetObject(workbook, sourceInfo);
+  const parsed = workbook.sheets.length >= 6 && workbook.byRole.base[0]?.[0] === "字段"
+    ? sixSheetBaseObject(workbook.byRole.base, sourceInfo.type, sourceInfo.xlsxPath)
+    : oneSheetObject(workbook, sourceInfo);
+  return {
+    ...parsed,
+    type: parsed.type || sourceInfo.type,
+    archivePath: parsed.archivePath || path.dirname(sourceInfo.xlsxPath),
+  };
 }
 
 function scenarioIdFromSource(sourceInfo, base) {
   const sourceDir = path.basename(path.dirname(sourceInfo.xlsxPath));
-  const raw = `${sourceInfo.dir}-${base.name || sourceDir}`;
+  const identity = sourceInfo.legacyLayout
+    ? [sourceInfo.categoryDir || sourceInfo.dir, base.name || sourceDir]
+    : [base.platform, base.imageVersion, base.type, base.name || sourceDir];
+  const raw = identity.filter(Boolean).join("-") || `${sourceInfo.dir}-${sourceDir}`;
   return raw.toLowerCase().replace(/[^a-z0-9_一-龥-]+/giu, "-").replace(/^-+|-+$/gu, "");
 }
 
@@ -514,6 +523,7 @@ function createSchema(db) {
     CREATE TABLE IF NOT EXISTS instruction_metrics (thread_id TEXT NOT NULL, scope TEXT NOT NULL, event TEXT NOT NULL, value REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_metrics (thread_id TEXT PRIMARY KEY, density REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS syscall_top (thread_id TEXT NOT NULL, rank INTEGER NOT NULL, number INTEGER NOT NULL, name TEXT NOT NULL, share REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS syscall_business_tags (thread_id TEXT NOT NULL, rank INTEGER NOT NULL, label TEXT NOT NULL, share REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS hotspot_threads (id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, dimension TEXT NOT NULL, thread_id TEXT NOT NULL, rank INTEGER NOT NULL, score REAL NOT NULL, name TEXT NOT NULL DEFAULT '', thread_type TEXT NOT NULL DEFAULT '');
     CREATE TABLE IF NOT EXISTS hotspot_sos (id TEXT PRIMARY KEY, hotspot_thread_id TEXT NOT NULL, rank INTEGER NOT NULL, name TEXT NOT NULL, value REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS hotspot_functions (hotspot_so_id TEXT NOT NULL, rank INTEGER NOT NULL, name TEXT NOT NULL, value REAL NOT NULL);
@@ -530,6 +540,7 @@ function migrateSchema(db) {
   if (!hotspotThreadColumns.has("name")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN name TEXT NOT NULL DEFAULT ''");
   if (!hotspotThreadColumns.has("thread_type")) db.exec("ALTER TABLE hotspot_threads ADD COLUMN thread_type TEXT NOT NULL DEFAULT ''");
   db.exec("CREATE TABLE IF NOT EXISTS topdown_thread_meta (thread_id TEXT PRIMARY KEY, kernel_inst_share REAL, kernel_cycle_share REAL)");
+  db.exec("CREATE TABLE IF NOT EXISTS syscall_business_tags (thread_id TEXT NOT NULL, rank INTEGER NOT NULL, label TEXT NOT NULL, share REAL NOT NULL)");
 }
 
 function resetSchema(db) {
@@ -537,6 +548,7 @@ function resetSchema(db) {
     DROP TABLE IF EXISTS hotspot_functions;
     DROP TABLE IF EXISTS hotspot_sos;
     DROP TABLE IF EXISTS hotspot_threads;
+    DROP TABLE IF EXISTS syscall_business_tags;
     DROP TABLE IF EXISTS syscall_top;
     DROP TABLE IF EXISTS syscall_metrics;
     DROP TABLE IF EXISTS instruction_metrics;
@@ -557,6 +569,7 @@ function deleteScenarioPayload(db, scenarioId) {
   db.prepare("DELETE FROM hotspot_functions WHERE hotspot_so_id IN (SELECT s.id FROM hotspot_sos s JOIN hotspot_threads h ON h.id = s.hotspot_thread_id WHERE h.scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM hotspot_sos WHERE hotspot_thread_id IN (SELECT id FROM hotspot_threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM hotspot_threads WHERE scenario_id = ?").run(scenarioId);
+  db.prepare("DELETE FROM syscall_business_tags WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM syscall_top WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM syscall_metrics WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
   db.prepare("DELETE FROM instruction_metrics WHERE thread_id IN (SELECT id FROM threads WHERE scenario_id = ?)").run(scenarioId);
@@ -596,6 +609,7 @@ function prepareStatements(db) {
     instruction: db.prepare("INSERT INTO instruction_metrics VALUES (?, ?, ?, ?)"),
     syscallMetric: db.prepare("INSERT INTO syscall_metrics VALUES (?, ?)"),
     syscallTop: db.prepare("INSERT INTO syscall_top VALUES (?, ?, ?, ?, ?)"),
+    syscallBusinessTag: db.prepare("INSERT INTO syscall_business_tags VALUES (?, ?, ?, ?)"),
     hotspotThread: db.prepare("INSERT INTO hotspot_threads (id, scenario_id, dimension, thread_id, rank, score, name, thread_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
     hotspotSo: db.prepare("INSERT INTO hotspot_sos VALUES (?, ?, ?, ?, ?)"),
     hotspotFunction: db.prepare("INSERT INTO hotspot_functions VALUES (?, ?, ?, ?)"),
@@ -736,7 +750,7 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   const scenarioId = scenarioIdFromSource(sourceInfo, base);
   if (debugMode) console.warn(`[debug] scenario ${scenarioId}: ${JSON.stringify(base)}`);
   if (debugMode) await dumpWorkbookExcelDebug(sourceInfo.xlsxPath, scenarioId, workbook);
-  const hitraceDir = path.join(path.dirname(sourceInfo.xlsxPath), "hitrace");
+  const hitraceDir = sourceInfo.hitraceDir || path.join(path.dirname(sourceInfo.xlsxPath), "hitrace");
   try {
     const stat = await fs.stat(hitraceDir);
     if (!stat.isDirectory()) throw new Error("not a directory");
@@ -767,7 +781,7 @@ async function importScenario(db, statements, sourceInfo, warnings) {
   for (const thread of uniqueThreads(parsed.threads)) {
     statements.thread.run(thread.id, scenarioId, thread.name, thread.type, thread.loadShare, thread.rank);
   }
-  await importTraceSummary(statements, scenarioId, hitraceDir, warnings);
+  await importTraceSummary(statements, scenarioId, sourceInfo.traceSummaryPath || path.join(hitraceDir, "trace_summary.json"), warnings);
   importHizeeRows(statements, scenarioId, parsed.hizee);
   for (const row of parsed.topdown) statements.topdown.run(row.threadId, row.scope, row.level, row.metric, row.parent, row.value);
   for (const row of parsed.topdownMeta) statements.topdownMeta.run(row.threadId, row.kernelInstShare, row.kernelCycleShare);
@@ -1837,14 +1851,12 @@ function parseSyscallCalls(calls) {
   return parsed;
 }
 
-async function importTraceSummary(statements, scenarioId, hitraceDir, warnings) {
-  const summaryPath = path.join(hitraceDir, "trace_summary.json");
+async function importTraceSummary(statements, scenarioId, summaryPath, warnings) {
   let summary;
   try {
     summary = JSON.parse(await fs.readFile(summaryPath, "utf8"));
   } catch (error) {
-    warnings.push(`Missing or invalid trace summary for ${scenarioId}: ${summaryPath} (${error.message})`);
-    return;
+    throw new Error(`Missing or invalid trace summary for ${scenarioId}: ${summaryPath} (${error.message})`);
   }
   const debug = {
     keys: Object.keys(summary || {}),
@@ -1995,6 +2007,9 @@ function importSyscallRows(statements, syscalls) {
     for (const call of row.calls) {
       statements.syscallTop.run(row.threadId, call.rank, call.number, call.name, round2(call.share));
     }
+    classifySyscallBusinessTags(row.calls).forEach((tag, index) => {
+      statements.syscallBusinessTag.run(row.threadId, index + 1, tag.label, round2(tag.share));
+    });
   }
 }
 
@@ -2038,29 +2053,106 @@ function importHotspotRows(statements, scenarioId, hotspots, threadMap) {
   }
 }
 
-async function discoverSources() {
-  const sources = [];
-  for (const category of categoryDirs) {
-    const categoryPath = path.join(sourceRoot, category.dir);
-    let entries = [];
-    try {
-      entries = await fs.readdir(categoryPath, { withFileTypes: true });
-    } catch {
+function categoryFromDirectory(name) {
+  const normalized = clean(name).toLowerCase();
+  const exact = categoryDirs.find((category) => category.dir.toLowerCase() === normalized);
+  if (exact) return exact;
+  const order = Number(normalized.match(/^(0?[1-5])(?:[_-]|$)/u)?.[1]);
+  return Number.isInteger(order) ? categoryDirs[order - 1] || null : null;
+}
+
+async function directoryEntries(directory) {
+  try {
+    return await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (directory === sourceRoot) throw new Error(`Cannot read source directory: ${sourceRoot} (${error.message})`);
+    return [];
+  }
+}
+
+async function walkSourceFiles(directory, collected = { workbooks: [], traceSummaries: [] }) {
+  const entries = await directoryEntries(directory);
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await walkSourceFiles(entryPath, collected);
       continue;
     }
-    for (const entry of entries.filter((item) => item.isDirectory())) {
-      const scenarioDir = path.join(categoryPath, entry.name);
-      let files = [];
-      try {
-        files = await fs.readdir(scenarioDir);
-      } catch {
-        continue;
-      }
-      const xlsx = files.find((file) => !file.startsWith("~$") && /^CPU测试场景库分析.*\.xlsx$/iu.test(file));
-      if (xlsx) sources.push({ type: category.type, dir: category.dir, xlsxPath: path.join(scenarioDir, xlsx) });
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith("~$") && /^CPU测试场景库分析.*\.xlsx$/iu.test(entry.name)) collected.workbooks.push(entryPath);
+    if (entry.name.toLowerCase() === "trace_summary.json") collected.traceSummaries.push(entryPath);
+  }
+  return collected;
+}
+
+function isPathInside(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+}
+
+function pairSourceFiles(workbooks, traceSummaries) {
+  const assignments = new Map(workbooks.map((xlsxPath) => [xlsxPath, []]));
+  const ambiguousWorkbooks = new Set();
+
+  for (const traceSummaryPath of traceSummaries) {
+    const eligible = workbooks
+      .filter((xlsxPath) => isPathInside(path.dirname(xlsxPath), traceSummaryPath))
+      .map((xlsxPath) => ({
+        xlsxPath,
+        distance: path.relative(path.dirname(xlsxPath), traceSummaryPath).split(path.sep).length,
+      }))
+      .sort((a, b) => a.distance - b.distance || a.xlsxPath.localeCompare(b.xlsxPath));
+    if (!eligible.length) {
+      console.warn(`Ignored trace_summary.json without parent workbook: ${traceSummaryPath}`);
+      continue;
+    }
+    const nearest = eligible.filter((item) => item.distance === eligible[0].distance);
+    if (nearest.length !== 1) {
+      nearest.forEach((item) => ambiguousWorkbooks.add(item.xlsxPath));
+      console.warn(`Ambiguous trace_summary.json parent (${nearest.map((item) => item.xlsxPath).join(" | ")}): ${traceSummaryPath}`);
+      continue;
+    }
+    assignments.get(nearest[0].xlsxPath).push(traceSummaryPath);
+  }
+
+  const pairs = [];
+  for (const xlsxPath of workbooks) {
+    const summaries = assignments.get(xlsxPath) || [];
+    if (ambiguousWorkbooks.has(xlsxPath)) {
+      console.warn(`Skipped ambiguous workbook: ${xlsxPath}`);
+    } else if (!summaries.length) {
+      console.warn(`Skipped workbook without trace_summary.json: ${xlsxPath}`);
+    } else if (summaries.length > 1) {
+      console.warn(`Skipped workbook with multiple trace_summary.json files (${summaries.join(" | ")}): ${xlsxPath}`);
+    } else {
+      pairs.push({ xlsxPath, traceSummaryPath: summaries[0] });
     }
   }
-  return sources.sort((a, b) => a.xlsxPath.localeCompare(b.xlsxPath));
+  return pairs;
+}
+
+function sourceMetadata(xlsxPath, traceSummaryPath) {
+  const scenarioDir = path.dirname(xlsxPath);
+  const relativeParts = path.relative(sourceRoot, scenarioDir).split(path.sep).filter(Boolean);
+  const category = categoryFromDirectory(relativeParts[0]);
+  const legacyLayout = Boolean(category && relativeParts.length === 2);
+  return {
+    type: legacyLayout ? category.type : "",
+    dir: path.dirname(path.relative(sourceRoot, xlsxPath)),
+    categoryDir: legacyLayout ? relativeParts[0] : "",
+    legacyLayout,
+    scenarioDir,
+    xlsxPath,
+    hitraceDir: path.dirname(traceSummaryPath),
+    traceSummaryPath,
+  };
+}
+
+async function discoverSources() {
+  const found = await walkSourceFiles(sourceRoot);
+  return pairSourceFiles(found.workbooks, found.traceSummaries)
+    .map(({ xlsxPath, traceSummaryPath }) => sourceMetadata(xlsxPath, traceSummaryPath))
+    .sort((a, b) => a.xlsxPath.localeCompare(b.xlsxPath));
 }
 
 async function main() {

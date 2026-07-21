@@ -92,6 +92,25 @@ function makeSyscalls(seed) {
   return [...top5, { name: "others", value: round(100 - used) }].sort(compareStackItems);
 }
 
+function makeSyscallBusinessTags(calls) {
+  const totals = new Map();
+  calls.filter((call) => call.name !== "others").forEach((call) => {
+    const name = call.name.toLowerCase();
+    let label = "通用系统服务型";
+    if (/futex|poll|epoll|nanosleep|clock_nanosleep|sched_yield|select/.test(name)) label = "同步等待型";
+    else if (/recv|send|read|write|socket|connect|accept/.test(name)) label = "I/O通信型";
+    else if (/mmap|munmap|mprotect|madvise|brk/.test(name)) label = "内存管理型";
+    else if (/open|close|stat|fcntl|getdents|fsync/.test(name)) label = "文件访问型";
+    else if (/ioctl|prctl|getpid|gettid|clone|set_/.test(name)) label = "系统控制型";
+    else if (/clock|gettimeofday|timer/.test(name)) label = "时序驱动型";
+    totals.set(label, (totals.get(label) || 0) + call.value);
+  });
+  return [...totals.entries()]
+    .map(([label, share]) => ({ label, share: round(share) }))
+    .sort((a, b) => b.share - a.share || a.label.localeCompare(b.label))
+    .slice(0, 2);
+}
+
 function compareStackItems(a, b) {
   const aPriority = stackItemPriority(a.name);
   const bPriority = stackItemPriority(b.name);
@@ -198,13 +217,18 @@ function makeScenario(row, index) {
       total: instructionEvents.map((event, i) => ({ name: event, value: round(1.4 + seed * 0.25 + t * 0.5 + i * 0.32) })),
       kernel: instructionEvents.map((event, i) => ({ name: event, value: round(0.4 + seed * 0.11 + t * 0.18 + i * 0.12) })),
     })),
-    syscallInfo: topThreads.map((thread, t) => ({
-      name: thread.name,
-      threadType: thread.threadType,
-      loadShare: thread.loadShare,
-      density: round(42 + seed * 8 + t * 13),
-      calls: makeSyscalls(seed + t),
-    })),
+    syscallInfo: topThreads.map((thread, t) => {
+      const calls = makeSyscalls(seed + t);
+      return {
+        name: thread.name,
+        threadType: thread.threadType,
+        loadShare: thread.loadShare,
+        density: round(42 + seed * 8 + t * 13),
+        calls,
+        businessTags: makeSyscallBusinessTags(calls),
+        businessAnalysisSource: "offline",
+      };
+    }),
     hotspotInfo: {
       cycle: makeHotspotThreads(topThreads, seed, "cycle"),
       fe: makeHotspotThreads(topThreads, seed, "FE"),

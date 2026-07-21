@@ -54,13 +54,18 @@ const threadTypeOptions = [
 ];
 
 const state = {
-  page: "compare",
+  page: "trend",
   compareFilters: {},
   trendFilters: {},
   selectedIds: new Set(scenarios.slice(0, 3).map((item) => item.id)),
   trendMetric: initialTrendMetric.key,
   trendCategory: getTrendMetricCategory(initialTrendMetric.key),
   threadTypes: new Set(threadTypeOptions.map(([value]) => value)),
+  imageFilters: {},
+  conclusionFilters: {},
+  conclusionTouchedFields: new Set(),
+  currentImageVersion: unique("imageVersion").at(-1) || "",
+  baselineImageVersion: unique("imageVersion")[0] || "",
   expandedTopdownThreadIndexes: new Set(),
   expandedHotspotThreadIndexes: new Set(),
   savedTrends: [],
@@ -212,12 +217,13 @@ function renderShell() {
         h("h1", {}, ["CPU 场景库性能 Dashboard"]),
       ]),
       h("nav", { class: "nav" }, [
+        navButton("特征概览", "trend"),
         navButton("对比展示", "compare"),
-        navButton("特征汇总", "trend"),
+        navButton("结论汇总", "conclusion"),
       ]),
     ]),
   );
-  page.append(state.page === "compare" ? renderComparePage() : renderTrendPage());
+  page.append(state.page === "trend" ? renderTrendPage() : state.page === "compare" ? renderComparePage() : renderConclusionSummaryPage());
   return page;
 }
 
@@ -260,11 +266,12 @@ function renderComparePage() {
     }),
     renderScenarioSelector(matched),
     renderCompareSection("1. 基础信息", active, renderBaseCard),
-    renderCompareSection("2. 负载信息", active, renderLoadCard),
-    renderCompareSection("3. TOPDOWN 信息", active, renderTopdownCard),
-    renderCompareSection("4. 指令分布信息", active, renderInstructionCard),
-    renderCompareSection("5. 系统调用信息", active, renderSyscallCard),
-    renderCompareSection("6. 热点与瓶颈 SO/函数", active, renderHotspotCard),
+    renderCompareSection("2. 场景特征摘要", active, renderScenarioSummaryCard),
+    renderCompareSection("3. 负载信息", active, renderLoadCard),
+    renderCompareSection("4. TOPDOWN 信息", active, renderTopdownCard),
+    renderCompareSection("5. 指令分布信息", active, renderInstructionCard),
+    renderCompareSection("6. 系统调用信息", active, renderSyscallCard),
+    renderCompareSection("7. 热点与瓶颈 SO/函数", active, renderHotspotCard),
   ]);
 }
 
@@ -306,6 +313,12 @@ const compareSyncSelectors = [
   ":scope > h3",
   ":scope > .badge-row",
   ":scope > .info-row",
+  ":scope > .summary-list > .summary-item",
+  ":scope > .summary-list > .summary-item .topdown-summary-thread",
+  ":scope > .summary-list > .summary-item .topdown-summary-path",
+  ":scope > .summary-list > .summary-item .topdown-summary-anomalies",
+  ":scope > .summary-list > .summary-item .instruction-summary-thread",
+  ":scope > .summary-list > .summary-item .syscall-summary-thread",
   ":scope > h4",
   ":scope > .chart-panel",
   ":scope > .hizee-matrix-wrap",
@@ -382,6 +395,643 @@ function renderBaseCard(scenario) {
     infoRow("镜像版本", base.imageVersion),
     infoRow("归档路径", base.archivePath),
   ]);
+}
+
+function renderScenarioSummaryCard(scenario) {
+  return h("article", { class: "card summary-card-compare" }, [
+    cardHeader(scenario),
+    h("div", { class: "summary-list" }, scenarioFeatureSummaries(scenario).map(renderScenarioSummaryItem)),
+  ]);
+}
+
+function renderScenarioSummaryItem(item) {
+  const threadRenderers = {
+    topdown: renderTopdownSummaryThread,
+    instruction: renderInstructionSummaryThread,
+    syscall: renderSyscallSummaryThread,
+  };
+  const threadRenderer = threadRenderers[item.kind];
+  const hasThreadProfiles = Boolean(threadRenderer && item.threads?.length);
+  const content = hasThreadProfiles
+    ? h("div", { class: `${item.kind}-summary-threads` }, item.threads.map(threadRenderer))
+    : renderCompactSummaryContent(item);
+  const anomalyCount = hasThreadProfiles
+    ? asArray(item.threads).reduce((count, thread) => count + asArray(thread.anomalies).length, 0)
+    : asArray(item.anomalies).length;
+  return h("div", { class: `summary-item ${item.kind}` }, [
+    h("div", { class: "summary-item-head" }, [
+      h("strong", {}, [item.title]),
+      h("span", {}, [anomalyCount
+        ? `${anomalyCount} 项指标异常`
+        : hasThreadProfiles ? `${item.threads.length} 个线程` : item.badge]),
+    ]),
+    content,
+  ]);
+}
+
+function renderCompactSummaryContent(item) {
+  const anomalies = asArray(item.anomalies);
+  return h("div", { class: "summary-compact-content" }, [
+    item.profileTags?.length
+      ? h("div", { class: "summary-profile-tags" }, item.profileTags.map((tag) => h("span", {}, [tag])))
+      : null,
+    h("p", { class: "summary-conclusion" }, [item.text]),
+    anomalies.length ? renderSummaryAnomalies(anomalies) : null,
+  ]);
+}
+
+function renderSummaryAnomalies(anomalies, label = "指标异常") {
+  const items = asArray(anomalies);
+  return h("div", { class: `summary-anomaly-row${items.length ? " has-anomaly" : ""}` }, [
+    h("span", { class: "summary-anomaly-label" }, [label]),
+    items.length
+      ? h("div", { class: "summary-anomaly-chips" }, items.map((item) => h("span", { class: item.side?.includes("最高") ? "high" : "low" }, [
+        h("b", {}, [`${item.label}${item.side}`]),
+        `（${displayMetric(item.value, item.unit ? ` ${item.unit}` : "", item.digits ?? (item.unit ? 1 : 2))}）`,
+      ])))
+      : h("span", { class: "summary-anomaly-empty" }, ["无指标异常"]),
+  ]);
+}
+
+function renderTopdownSummaryThread(profile) {
+  return h("section", { class: `topdown-summary-thread ${profile.typeClass}` }, [
+    h("div", { class: "topdown-summary-thread-head" }, [
+      h("div", { class: "topdown-summary-identity" }, [
+        h("span", { class: `thread-type-badge ${profile.typeClass}` }, [profile.typeLabel]),
+        h("strong", {}, [profile.name]),
+      ]),
+      h("div", { class: "topdown-summary-head-badges" }, [
+        h("span", { class: profile.anomalies.length ? "topdown-thread-anomaly-chip" : "topdown-normal-chip" }, [
+          profile.anomalies.length ? `${profile.anomalies.length} 项指标异常` : "无指标异常",
+        ]),
+      ]),
+    ]),
+    h("div", { class: "topdown-key-metrics" }, [
+      h("span", {}, ["IPC 总体/内核 ", h("b", {}, [`${displayMetric(profile.ipc, "", 2)}/${displayMetric(profile.kernelIpc, "", 2)}`])]),
+      h("span", {}, ["内核占比 Inst/Cycle ", h("b", {}, [`${displayMetric(profile.kernelInstShare, "%", 1)}/${displayMetric(profile.kernelCycleShare, "%", 1)}`])]),
+    ]),
+    h("div", { class: "topdown-summary-section topdown-summary-path" }, [
+      h("span", { class: "topdown-summary-label" }, ["Bound 链路"]),
+      h("div", { class: "topdown-path-steps" }, profile.path.flatMap((item, index) => [
+        h("span", { class: `topdown-path-step level-${index + 1}` }, [
+          h("small", {}, [`L${index + 1}`]),
+          h("b", {}, [item.name]),
+          h("em", {}, [`（${displayMetric(item.value, " PKI", 1)}）`]),
+        ]),
+        index < profile.path.length - 1 ? h("span", { class: "topdown-path-arrow" }, ["→"]) : null,
+      ])),
+    ]),
+    profile.anomalies.length ? renderSummaryAnomalies(profile.anomalies) : null,
+  ]);
+}
+
+function renderInstructionSummaryThread(profile) {
+  return h("section", { class: `instruction-summary-thread ${profile.typeClass}` }, [
+    h("div", { class: "compact-thread-head" }, [
+      h("div", { class: "topdown-summary-identity" }, [
+        h("span", { class: `thread-type-badge ${profile.typeClass}` }, [profile.typeLabel]),
+        h("strong", {}, [profile.name]),
+      ]),
+      h("span", { class: "instruction-total-chip" }, [`总计 ${displayMetric(profile.totalPki, " PKI", 1)}`]),
+    ]),
+    h("div", { class: "instruction-stack", title: profile.segments.map((item) => `${item.name}: ${displayMetric(item.value, " PKI", 1)} / ${displayMetric(item.share, "%", 1)}`).join("\n") },
+      profile.segments.map((item) => h("i", { style: `width:${safePercent(item.share)}%;background:${stackColor(item.name)}` }, [
+        item.share >= 13 ? displayMetric(item.share, "%", 0) : "",
+      ]))),
+    h("div", { class: "instruction-stack-legend" }, profile.segments.map((item) => h("span", {}, [
+      h("i", { style: `background:${stackColor(item.name)}` }),
+      h("b", {}, [item.name]),
+      ` ${displayMetric(item.share, "%", 1)}`,
+    ]))),
+    profile.anomalies.length ? renderSummaryAnomalies(profile.anomalies) : null,
+  ]);
+}
+
+function renderSyscallSummaryThread(profile) {
+  return h("section", { class: `syscall-summary-thread ${profile.typeClass}` }, [
+    h("div", { class: "compact-thread-head" }, [
+      h("div", { class: "topdown-summary-identity" }, [
+        h("span", { class: `thread-type-badge ${profile.typeClass}` }, [profile.typeLabel]),
+        h("strong", {}, [profile.name]),
+      ]),
+      h("span", { class: "syscall-density-chip" }, [`密度 ${displayMetric(profile.density, "", 0)}`]),
+    ]),
+    h("div", { class: "syscall-business-row" }, [
+      h("span", { class: "offline-profile-label" }, ["离线业务画像"]),
+      ...profile.businessTags.map((item) => h("span", { class: "syscall-business-tag" }, [
+        h("b", {}, [item.label]),
+        ` ${displayMetric(item.share, "%", 1)}`,
+      ])),
+    ]),
+    h("p", { class: "syscall-top5-line" }, [
+      "Top5 ",
+      profile.calls.map((call) => `${displayText(call.name)} ${displayMetric(call.value, "%", 1)}`).join(" · "),
+    ]),
+    profile.anomalies.length ? renderSummaryAnomalies(profile.anomalies) : null,
+  ]);
+}
+
+function scenarioFeatureSummaries(scenario) {
+  const loadInfo = asObject(scenario.loadInfo);
+  const loadProfile = scenarioLoadProfile(scenario);
+  const topdownProfile = scenarioTopdownProfile(scenario);
+  const instructionProfiles = scenarioInstructionProfiles(scenario);
+  const syscallProfiles = scenarioSyscallProfiles(scenario);
+  const hotspotThread = asArray(scenario.hotspotInfo?.cycle)[0] || {};
+  const topSo = asArray(hotspotThread.sos)[0];
+  const topFunc = asArray(topSo?.funcs)[0];
+  const hotspotAnomalies = hotspotSummaryAnomalies(scenario, hotspotThread, topSo, topFunc);
+  return [
+    {
+      title: "负载",
+      badge: loadProfile.tags.join(" · "),
+      kind: "load",
+      text: loadProfile.text,
+      profileTags: loadProfile.tags,
+      anomalies: loadProfile.anomalies,
+    },
+    {
+      title: "TOPDOWN",
+      badge: topdownProfile.tags.join(" · "),
+      kind: "topdown",
+      text: topdownProfile.text,
+      threads: topdownProfile.threads,
+    },
+    {
+      title: "指令分布",
+      kind: "instruction",
+      threads: instructionProfiles,
+    },
+    {
+      title: "系统调用",
+      kind: "syscall",
+      threads: syscallProfiles,
+    },
+    {
+      title: "热点与瓶颈 SO/函数",
+      badge: topSo?.name || "NA",
+      kind: "hotspot",
+      text: `Cycle 热点集中在 ${displayText(topSo?.name)} / ${displayText(topFunc?.name)}，占比分别为 ${displayValue(topSo?.value, "%")} / ${displayValue(topFunc?.value, "%")}。`,
+      anomalies: hotspotAnomalies,
+    },
+  ];
+}
+
+function scenarioLoadProfile(scenario) {
+  const values = scenarioLoadValues(scenario);
+  const { fps, ddrFreq, targetFps, allAcr, uiAcr, renderAcr } = values;
+  const tags = loadProfileTags({ fps, targetFps, ddrFreq, acr: allAcr });
+  return {
+    tags,
+    text: `帧率 ${displayMetric(fps, "", 1)}/${targetFps}fps；ACR 全进程整机 ${displayMetric(allAcr.system, "%", 1)}、主逻辑/UI进程 ${displayMetric(uiAcr.system, "%", 1)}、Render Service ${displayMetric(renderAcr.system, "%", 1)}；DDR ${displayMetric(ddrFreq, " MHz", 0)}。`,
+    anomalies: loadSummaryAnomalies(scenario, values),
+  };
+}
+
+function scenarioLoadValues(scenario) {
+  const rows = asArray(asObject(scenario.loadInfo).hizeeRows);
+  const allProcess = rows.find((row) => row.scope === "所有进程") || rows[0] || {};
+  const uiProcess = rows.find((row) => row.scope === "UI进程") || rows[1] || {};
+  const renderService = rows.find((row) => row.scope === "render service") || rows[2] || {};
+  const peaks = cpuPeakFrequencies(scenario.base?.platform);
+  return {
+    fps: toFiniteNumber(allProcess.fps),
+    ddrFreq: toFiniteNumber(allProcess.ddrFreq),
+    targetFps: scenarioTargetFps(scenario),
+    allAcr: acrProfile(allProcess, peaks),
+    uiAcr: acrProfile(uiProcess, peaks),
+    renderAcr: acrProfile(renderService, peaks),
+  };
+}
+
+function loadSummaryAnomalies(scenario, current) {
+  const peers = scenarios.filter((item) => item.base?.type === scenario.base?.type).map(scenarioLoadValues);
+  const metrics = [
+    summaryMetric("帧率", current.fps, "fps", 1, peers.map((item) => item.fps)),
+    summaryMetric("全进程小核ACR", current.allAcr.little, "%", 1, peers.map((item) => item.allAcr.little)),
+    summaryMetric("全进程中核ACR", current.allAcr.mid, "%", 1, peers.map((item) => item.allAcr.mid)),
+    summaryMetric("全进程大核ACR", current.allAcr.big, "%", 1, peers.map((item) => item.allAcr.big)),
+    summaryMetric("全进程整机ACR", current.allAcr.system, "%", 1, peers.map((item) => item.allAcr.system)),
+    summaryMetric("UI进程整机ACR", current.uiAcr.system, "%", 1, peers.map((item) => item.uiAcr.system)),
+    summaryMetric("Render Service整机ACR", current.renderAcr.system, "%", 1, peers.map((item) => item.renderAcr.system)),
+    summaryMetric("DDR平均频率", current.ddrFreq, "MHz", 0, peers.map((item) => item.ddrFreq)),
+  ];
+  return metrics.map(percentileSummaryAnomaly).filter(Boolean).slice(0, 3);
+}
+
+function scenarioInstructionProfiles(scenario) {
+  return asArray(scenario.instructionMix).map((thread) => {
+    const events = [...asArray(thread.total)]
+      .map((item) => ({ name: displayText(item.name), value: toFiniteNumber(item.value) || 0 }))
+      .sort((a, b) => b.value - a.value);
+    const totalPki = events.reduce((sum, item) => sum + item.value, 0);
+    const topEvents = events.slice(0, 5);
+    const otherValue = events.slice(5).reduce((sum, item) => sum + item.value, 0);
+    const segments = [...topEvents, ...(otherValue > 0 ? [{ name: "other instructions", value: otherValue }] : [])]
+      .map((item) => ({ ...item, share: totalPki > 0 ? (item.value / totalPki) * 100 : 0 }));
+    return {
+      name: displayText(thread.name),
+      typeLabel: threadTypeLabel(getThreadDisplayType(thread)),
+      typeClass: summaryThreadTypeClass(thread),
+      totalPki,
+      segments,
+      anomalies: instructionSummaryAnomalies(scenario, thread),
+    };
+  });
+}
+
+function scenarioSyscallProfiles(scenario) {
+  return asArray(scenario.syscallInfo).map((thread) => {
+    const calls = asArray(thread.calls).filter((call) => call.name !== "others").slice(0, 5);
+    return {
+      name: displayText(thread.name),
+      typeLabel: threadTypeLabel(getThreadDisplayType(thread)),
+      typeClass: summaryThreadTypeClass(thread),
+      density: thread.density,
+      calls,
+      businessTags: asArray(thread.businessTags),
+      anomalies: syscallSummaryAnomalies(scenario, thread),
+    };
+  });
+}
+
+function summaryThreadTypeClass(thread) {
+  const type = getThreadType(thread);
+  if (type === "main" || type === "main_process") return "main";
+  if (type === "render" || type === "render_process") return "render";
+  return "other";
+}
+
+function instructionSummaryAnomalies(scenario, thread) {
+  const peers = comparableFeatureThreads(scenario, thread, "instructionMix");
+  return [...asArray(thread.total)]
+    .sort((a, b) => (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0))
+    .map((event) => percentileSummaryAnomaly(summaryMetric(
+      displayText(event.name),
+      event.value,
+      "PKI",
+      1,
+      peers.map((item) => asArray(item.total).find((candidate) => candidate.name === event.name)?.value),
+    )))
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function syscallSummaryAnomalies(scenario, thread) {
+  const peers = comparableFeatureThreads(scenario, thread, "syscallInfo");
+  const metrics = [summaryMetric("syscall密度", thread.density, "条/千万条指令", 0, peers.map((item) => item.density))];
+  asArray(thread.calls).filter((call) => call.name !== "others").slice(0, 5).forEach((call) => {
+    metrics.push(summaryMetric(
+      `${displayText(call.name)}占比`,
+      call.value,
+      "%",
+      1,
+      peers.map((item) => asArray(item.calls).find((candidate) => candidate.name === call.name)?.value),
+    ));
+  });
+  return metrics.map(percentileSummaryAnomaly).filter(Boolean).slice(0, 3);
+}
+
+function hotspotSummaryAnomalies(scenario, thread, topSo, topFunc) {
+  const peers = comparableHotspotThreads(scenario, thread, "cycle");
+  const metrics = [summaryMetric("Cycle线程热度", thread.score, "%", 1, peers.map((item) => item.score))];
+  if (topSo?.name) {
+    metrics.push(summaryMetric(
+      `${displayText(topSo.name)}占比`,
+      topSo.value,
+      "%",
+      1,
+      peers.map((item) => asArray(item.sos).find((candidate) => candidate.name === topSo.name)?.value),
+    ));
+  }
+  if (topSo?.name && topFunc?.name) {
+    metrics.push(summaryMetric(
+      `${displayText(topFunc.name)}占比`,
+      topFunc.value,
+      "%",
+      1,
+      peers.map((item) => asArray(item.sos)
+        .find((candidate) => candidate.name === topSo.name)?.funcs
+        ?.find((candidate) => candidate.name === topFunc.name)?.value),
+    ));
+  }
+  return metrics.map(percentileSummaryAnomaly).filter(Boolean).slice(0, 3);
+}
+
+function comparableFeatureThreads(scenario, thread, featureKey) {
+  const type = scenario.base?.type;
+  const canonicalType = getThreadType(thread);
+  return scenarios
+    .filter((item) => item.base?.type === type)
+    .flatMap((item) => asArray(item[featureKey]))
+    .filter((item) => getThreadType(item) === canonicalType);
+}
+
+function comparableHotspotThreads(scenario, thread, dimension) {
+  const type = scenario.base?.type;
+  const canonicalType = getThreadType(thread);
+  return scenarios
+    .filter((item) => item.base?.type === type)
+    .flatMap((item) => asArray(item.hotspotInfo?.[dimension]))
+    .filter((item) => getThreadType(item) === canonicalType);
+}
+
+function summaryMetric(label, value, unit, digits, samples) {
+  return {
+    label,
+    value: toFiniteNumber(value),
+    unit,
+    digits,
+    samples: asArray(samples).map(toFiniteNumber).filter((item) => item != null),
+  };
+}
+
+function percentileSummaryAnomaly(metric) {
+  if (metric.value == null || metric.samples.length < 3) return null;
+  const low = quantile(metric.samples, 0.2);
+  const high = quantile(metric.samples, 0.8);
+  if (low == null || high == null || low === high) return null;
+  if (metric.value <= low) return { ...metric, side: "最低20%" };
+  if (metric.value >= high) return { ...metric, side: "最高20%" };
+  return null;
+}
+
+function scenarioTargetFps(scenario) {
+  const config = String(scenario.base?.config || "");
+  const match = config.match(/(\d+)\s*fps/i);
+  if (match) return Number(match[1]);
+  return scenario.base?.type === "游戏" ? 60 : 60;
+}
+
+function cpuPeakFrequencies(platform) {
+  const text = String(platform || "").toLowerCase();
+  if (text.includes("nch")) {
+    return {
+      little: [1750],
+      mid: [2350, 2700],
+      big: [3100],
+    };
+  }
+  return {
+    little: [1720],
+    mid: [2270],
+    big: [2750],
+  };
+}
+
+function acrProfile(row, peaks) {
+  const little = clusterAcr(row?.littleRunning, row?.littleFreq, peaks.little);
+  const mid = clusterAcr(row?.midRunning, row?.midFreq, peaks.mid);
+  const big = clusterAcr(row?.bigRunning, row?.bigFreq, peaks.big);
+  return {
+    little,
+    mid,
+    big,
+    system: average([little, mid, big]),
+  };
+}
+
+function clusterAcr(running, avgFreq, peakFreqs) {
+  const runningValue = toFiniteNumber(running);
+  const freqValue = toFiniteNumber(avgFreq);
+  const peaks = asArray(peakFreqs).map(toFiniteNumber).filter((value) => value != null && value > 0);
+  if (runningValue == null || freqValue == null || !peaks.length) return null;
+  return average(peaks.map((peak) => runningValue * (freqValue / peak)));
+}
+
+function acrText(profile) {
+  return [
+    displayMetric(profile?.little, "%", 1),
+    displayMetric(profile?.mid, "%", 1),
+    displayMetric(profile?.big, "%", 1),
+    displayMetric(profile?.system, "%", 1),
+  ].join("/");
+}
+
+function displayMetric(value, suffix = "", digits = 1) {
+  const number = toFiniteNumber(value);
+  if (number == null) return "NA";
+  return `${number.toFixed(digits)}${suffix}`;
+}
+
+function loadProfileTags({ fps, targetFps, ddrFreq, acr }) {
+  const tags = [];
+  const fpsValue = toFiniteNumber(fps);
+  const fpsGap = fpsValue == null || !targetFps ? null : targetFps - fpsValue;
+  if (fpsGap != null && fpsGap > 5) tags.push("严重掉帧");
+  else if (fpsGap != null && fpsGap > 1) tags.push("掉帧");
+  else if (fpsGap != null) tags.push("满帧");
+  if ((toFiniteNumber(acr?.little) || 0) > 60) tags.push("小核高载");
+  if ((toFiniteNumber(acr?.mid) || 0) > 20) tags.push("中核高载");
+  if ((toFiniteNumber(acr?.big) || 0) > 10) tags.push("大核高载");
+  if (!tags.some((tag) => tag.endsWith("高载"))) tags.push("CPU轻载");
+  const ddrValue = toFiniteNumber(ddrFreq);
+  if (ddrValue != null && ddrValue < 1000) tags.push("DDR低载");
+  else if (ddrValue != null && ddrValue < 2000) tags.push("DDR中载");
+  else if (ddrValue != null) tags.push("DDR高载");
+  return tags;
+}
+
+function loadProfileSentence(tags) {
+  const frameTag = tags.find((tag) => tag.includes("掉帧") || tag === "满帧");
+  const cpuTags = tags.filter((tag) => ["小核高载", "中核高载", "大核高载", "CPU轻载"].includes(tag));
+  const ddrTag = tags.find((tag) => tag.startsWith("DDR"));
+  return `负载画像为${[...cpuTags, ddrTag, frameTag].filter(Boolean).join("、")}。`;
+}
+
+function loadRiskLabel(bigRunning, fps) {
+  const running = toFiniteNumber(bigRunning);
+  const frameRate = toFiniteNumber(fps);
+  if (running == null) return "NA";
+  if (running >= 70 || (frameRate != null && frameRate < 45)) return "高负载";
+  if (running >= 55) return "中负载";
+  return "稳定";
+}
+
+function scenarioTopdownProfile(scenario) {
+  const profiles = asArray(scenario.topdownInfo).map((thread) => topdownThreadProfile(scenario, thread));
+  const tags = uniqueText(profiles.flatMap((profile) => profile.tags));
+  return {
+    tags: tags.length ? tags : ["TOPDOWN"],
+    text: profiles.length ? profiles.map((profile) => profile.text).join(" ") : "暂无 TOPDOWN 统计数据。",
+    threads: profiles,
+  };
+}
+
+function topdownThreadProfile(scenario, thread) {
+  const total = asObject(thread.total);
+  const kernel = asObject(thread.kernel);
+  const level1 = asObject(total.level1);
+  const kernelLevel1 = asObject(kernel.level1);
+  const bottleneck = getBottleneckPath(asArray(total.hierarchy), level1);
+  const ipc = toFiniteNumber(level1.IPC);
+  const kernelIpc = toFiniteNumber(kernelLevel1.IPC);
+  const ipcTag = ipcLevelTag(ipc);
+  const anomalies = topdownAnomalies(scenario, thread, bottleneck);
+  const anomalyTags = anomalies.map((item) => item.tag);
+  const anomalyText = anomalies.length
+    ? `异常指标：${anomalies.map((item) => `${item.label}${item.side}${topdownMetricValueText(item)}`).join("、")}`
+    : "异常指标：无指标异常";
+  const type = getThreadType(thread);
+  return {
+    tags: uniqueText([ipcTag, ...anomalyTags].filter(Boolean)),
+    text: `${threadDisplayLabel(thread)}：负载 ${displayMetric(thread.loadShare, "%", 1)}，IPC(user/kernel) ${displayMetric(ipc, "", 2)}/${displayMetric(kernelIpc, "", 2)}，内核占比(inst/cycle) ${displayMetric(kernelShareValue(thread, "inst"), "%", 1)}/${displayMetric(kernelShareValue(thread, "cycle"), "%", 1)}，bound链路 ${bottleneckPathText(bottleneck)}，Level1 PKI ${level1TopdownPkiText(level1)}，${anomalyText}。`,
+    name: displayText(thread.name),
+    typeLabel: threadTypeLabel(getThreadDisplayType(thread)),
+    typeClass: type === "main" || type === "main_process" ? "main" : type === "render" || type === "render_process" ? "render" : "other",
+    loadShare: thread.loadShare,
+    ipc,
+    kernelIpc,
+    ipcTag,
+    ipcClass: ipcTag === "低IPC" ? "low" : ipcTag === "中IPC" ? "medium" : "high",
+    kernelInstShare: kernelShareValue(thread, "inst"),
+    kernelCycleShare: kernelShareValue(thread, "cycle"),
+    path: [
+      { name: bottleneck.metric, value: bottleneck.metricValue },
+      { name: bottleneck.level2, value: bottleneck.level2Value },
+      { name: bottleneck.level3, value: bottleneck.level3Value },
+    ].filter((item) => item.name),
+    level1: [
+      { label: "MPKI", value: level1.MPKI },
+      { label: "FE", value: level1["FE BOUND"] },
+      { label: "BE", value: level1["BE BOUND"] },
+    ],
+    anomalies,
+  };
+}
+
+function ipcLevelTag(ipc) {
+  const value = toFiniteNumber(ipc);
+  if (value == null) return "";
+  if (value < 1) return "低IPC";
+  if (value < 2) return "中IPC";
+  return "高IPC";
+}
+
+function topdownAnomalies(scenario, thread, bottleneck) {
+  const anomalies = topdownSummaryMetrics(thread, bottleneck)
+    .map((metric) => topdownAnomalyForMetric(scenario, thread, metric))
+    .filter(Boolean);
+  const level1 = anomalies.filter((item) => !item.key.startsWith("node."));
+  const hierarchy = anomalies.filter((item) => item.key.startsWith("node."));
+  return [...level1.slice(0, 2), ...hierarchy.slice(0, 2)].slice(0, 4);
+}
+
+function topdownSummaryMetrics(thread, bottleneck) {
+  const metrics = [
+    topdownMetricDef("total.IPC", "IPC", "", (item) => asObject(item.total?.level1).IPC),
+    topdownMetricDef("total.MPKI", "MPKI", "PKI", (item) => asObject(item.total?.level1).MPKI),
+    topdownMetricDef("total.FE BOUND", "FE BOUND", "PKI", (item) => asObject(item.total?.level1)["FE BOUND"]),
+    topdownMetricDef("total.BE BOUND", "BE BOUND", "PKI", (item) => asObject(item.total?.level1)["BE BOUND"]),
+    topdownMetricDef("kernel.IPC", "内核IPC", "", (item) => asObject(item.kernel?.level1).IPC),
+    topdownMetricDef("kernel.MPKI", "内核MPKI", "PKI", (item) => asObject(item.kernel?.level1).MPKI),
+    topdownMetricDef("kernel.FE BOUND", "内核FE BOUND", "PKI", (item) => asObject(item.kernel?.level1)["FE BOUND"]),
+    topdownMetricDef("kernel.BE BOUND", "内核BE BOUND", "PKI", (item) => asObject(item.kernel?.level1)["BE BOUND"]),
+    topdownMetricDef("kernelShare.inst", "内核Inst占比", "%", (item) => kernelShareValue(item, "inst")),
+    topdownMetricDef("kernelShare.cycle", "内核Cycle占比", "%", (item) => kernelShareValue(item, "cycle")),
+  ];
+  const hierarchyNames = topdownHierarchyNodeNames(asArray(thread.total?.hierarchy));
+  [bottleneck.metric, bottleneck.level2, bottleneck.level3, ...hierarchyNames].filter(Boolean).forEach((name) => {
+    if (metrics.some((metric) => metric.key === `node.${name}` || metric.label === name)) return;
+    metrics.push(topdownMetricDef(`node.${name}`, name, "PKI", (item) => findTopdownNodeValue(asArray(item.total?.hierarchy), name)));
+  });
+  return metrics;
+}
+
+function topdownHierarchyNodeNames(groups) {
+  const names = [];
+  asArray(groups).forEach((group) => {
+    asArray(group.level2).forEach((level2) => {
+      names.push(level2.name);
+      asArray(level2.level3).forEach((level3) => names.push(level3.name));
+    });
+  });
+  return uniqueText(names.filter(Boolean));
+}
+
+function topdownMetricDef(key, label, unit, getter) {
+  return {
+    key,
+    label,
+    unit,
+    value: (thread) => toFiniteNumber(getter(thread)),
+  };
+}
+
+function topdownAnomalyForMetric(scenario, thread, metric) {
+  const value = metric.value(thread);
+  if (value == null) return null;
+  const samples = comparableTopdownThreads(scenario, thread)
+    .map((item) => metric.value(item))
+    .filter((item) => item != null);
+  if (samples.length < 3) return null;
+  const low = quantile(samples, 0.2);
+  const high = quantile(samples, 0.8);
+  if (low == null || high == null || low === high) return null;
+  if (value <= low) return { ...metric, value, side: "最低20%", tag: `${metric.label}最低20%` };
+  if (value >= high) return { ...metric, value, side: "最高20%", tag: `${metric.label}最高20%` };
+  return null;
+}
+
+function comparableTopdownThreads(scenario, thread) {
+  const type = scenario.base?.type;
+  const canonicalType = getThreadType(thread);
+  const entityKind = threadEntityKind(thread);
+  return scenarios
+    .filter((item) => item.base?.type === type)
+    .flatMap((item) => asArray(item.topdownInfo))
+    .filter((item) => getThreadType(item) === canonicalType && threadEntityKind(item) === entityKind);
+}
+
+function quantile(values, percentile) {
+  const sorted = asArray(values).map(toFiniteNumber).filter((value) => value != null).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const position = (sorted.length - 1) * percentile;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+}
+
+function topdownMetricValueText(metric) {
+  return `(${displayMetric(metric.value, metric.unit, metric.unit === "" ? 2 : 1)})`;
+}
+
+function bottleneckPathText(bottleneck) {
+  const parts = [
+    bottleneck.metric ? `${bottleneck.metric}（${displayMetric(bottleneck.metricValue, " PKI", 1)}）` : "",
+    bottleneck.level2 ? `${bottleneck.level2}（${displayMetric(bottleneck.level2Value, " PKI", 1)}）` : "",
+    bottleneck.level3 ? `${bottleneck.level3}（${displayMetric(bottleneck.level3Value, " PKI", 1)}）` : "",
+  ].filter(Boolean);
+  return parts.join(" > ") || "NA";
+}
+
+function level1TopdownPkiText(level1) {
+  return `MPKI ${displayMetric(level1.MPKI, "PKI", 1)} / FE ${displayMetric(level1["FE BOUND"], "PKI", 1)} / BE ${displayMetric(level1["BE BOUND"], "PKI", 1)}`;
+}
+
+function kernelShareValue(thread, kind) {
+  const explicit = toFiniteNumber(kind === "inst" ? thread?.kernelInstShare : thread?.kernelCycleShare);
+  if (explicit != null) return explicit;
+  const total = asObject(thread?.total?.level1);
+  const kernel = asObject(thread?.kernel?.level1);
+  const keys = kind === "inst" ? ["MPKI", "FE BOUND"] : ["MPKI", "FE BOUND", "BE BOUND"];
+  const ratios = keys.map((key) => {
+    const totalValue = toFiniteNumber(total[key]);
+    const kernelValue = toFiniteNumber(kernel[key]);
+    return totalValue && kernelValue != null ? (kernelValue / totalValue) * 100 : null;
+  }).filter((value) => value != null);
+  return clamp(average(ratios), 0, 100);
+}
+
+function clamp(value, min, max) {
+  const number = toFiniteNumber(value);
+  if (number == null) return null;
+  return Math.max(min, Math.min(max, number));
+}
+
+function uniqueText(items) {
+  return [...new Set(asArray(items).map((item) => displayText(item)).filter((item) => item && item !== "NA"))];
 }
 
 function renderLoadCard(scenario) {
@@ -624,6 +1274,589 @@ function renderTrendPage() {
     state.savedTrends.length ? renderSavedTrends() : "",
   ]);
 }
+
+function renderImageConclusionPage() {
+  const versions = unique("imageVersion");
+  if (!state.currentImageVersion && versions.length) state.currentImageVersion = versions.at(-1);
+  if (!state.baselineImageVersion && versions.length) state.baselineImageVersion = versions[0];
+  if (state.currentImageVersion === state.baselineImageVersion && versions.length > 1) {
+    state.baselineImageVersion = versions.find((version) => version !== state.currentImageVersion) || state.baselineImageVersion;
+  }
+  const report = buildImageCompareReport();
+  return h("div", { class: "page-grid" }, [
+    renderImageVersionControls(versions),
+    renderImageSummary(report),
+    renderImageScenarioDiffs(report),
+    renderImageMetricDiffs(report),
+    renderBottleneckAttribution(report),
+    renderImageVersionTrend(report),
+  ]);
+}
+
+const conclusionFieldOrder = [
+  ["platform", "抓取平台"],
+  ["imageVersion", "镜像版本"],
+  ["type", "场景类型"],
+  ["name", "场景名称"],
+  ["appVersion", "应用版本"],
+];
+
+function renderConclusionSummaryPage() {
+  const groups = buildConclusionGroups();
+  return h("div", { class: "page-grid" }, [
+    renderConclusionFilterPool(),
+    h("section", { class: "panel conclusion-summary-panel" }, [
+      h("div", { class: "section-title" }, [
+        h("h2", {}, ["结论汇总"]),
+        h("span", {}, [`按 ${groups.groupLabel} 组织对比 · ${groups.items.length} 个条目`]),
+      ]),
+      h("div", { class: "conclusion-group-grid", style: `--cols:${Math.min(3, Math.max(1, groups.items.length))}` },
+        groups.items.map(renderConclusionGroupCard)),
+    ]),
+  ]);
+}
+
+function renderConclusionFilterPool() {
+  return h("section", { class: "filter-panel conclusion-filter-panel" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["目标范围筛选池"]),
+      h("span", {}, ["抓取平台 / 镜像版本 / 场景类型 / 场景名称 / 应用版本"]),
+    ]),
+    h("div", { class: "conclusion-filter-grid" }, conclusionFieldOrder.map(([field, label]) => renderConclusionMultiField(field, label))),
+  ]);
+}
+
+function renderConclusionMultiField(field, label) {
+  const values = unique(field);
+  const selected = conclusionSelectedValues(field);
+  const isAll = selected.size === values.length;
+  return h("div", { class: "conclusion-field" }, [
+    h("div", { class: "conclusion-field-head" }, [
+      h("strong", {}, [label]),
+      h("button", {
+        onclick: () => {
+          state.conclusionFilters[field] = new Set(values);
+          state.conclusionTouchedFields.delete(field);
+          render();
+        },
+      }, [isAll ? "全部" : `${selected.size}/${values.length}`]),
+    ]),
+    h("div", { class: "conclusion-options" }, values.map((value) => h("label", { class: selected.has(value) ? "thread-type checked" : "thread-type" }, [
+      h("input", {
+        type: "checkbox",
+        checked: selected.has(value),
+        onchange: (event) => {
+          const next = new Set(selected);
+          if (event.target.checked) next.add(value);
+          else if (next.size > 1) next.delete(value);
+          state.conclusionFilters[field] = next;
+          state.conclusionTouchedFields.add(field);
+          render();
+        },
+      }),
+      h("span", {}, [value]),
+    ]))),
+  ]);
+}
+
+function conclusionSelectedValues(field) {
+  const values = unique(field);
+  const selected = state.conclusionFilters[field];
+  return selected instanceof Set ? selected : new Set(values);
+}
+
+function buildConclusionGroups() {
+  const selectedByField = Object.fromEntries(conclusionFieldOrder.map(([field]) => [field, conclusionSelectedValues(field)]));
+  const matched = scenarios.filter((scenario) => conclusionFieldOrder.every(([field]) => selectedByField[field].has(scenario.base[field])));
+  const lastIndex = conclusionLastGroupIndex(selectedByField);
+  const participatingFields = lastIndex >= 0
+    ? conclusionFieldOrder.slice(0, lastIndex + 1).filter(([field]) => state.conclusionTouchedFields.has(field) && selectedByField[field].size > 1)
+    : [];
+  const groupMap = new Map();
+  matched.forEach((scenario) => {
+    const keyParts = participatingFields.map(([field, label]) => `${label}:${scenario.base[field]}`);
+    const key = keyParts.length ? keyParts.join(" / ") : "全部范围";
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        key,
+        title: keyParts.length ? keyParts.map((part) => part.split(":")[1]).join(" · ") : "全部范围",
+        criteria: Object.fromEntries(participatingFields.map(([field]) => [field, scenario.base[field]])),
+        scenarios: [],
+      });
+    }
+    groupMap.get(key).scenarios.push(scenario);
+  });
+  const groupLabel = lastIndex >= 0 ? conclusionFieldOrder[lastIndex][1] : "全部范围";
+  return {
+    groupLabel,
+    items: [...groupMap.values()].map((group) => ({
+      ...group,
+      summary: summarizeConclusionGroup(group.scenarios),
+    })).sort((a, b) => b.summary.riskScore - a.summary.riskScore || a.title.localeCompare(b.title)),
+  };
+}
+
+function conclusionLastGroupIndex(selectedByField) {
+  let last = -1;
+  conclusionFieldOrder.forEach(([field], index) => {
+    if (!state.conclusionTouchedFields.has(field)) return;
+    if (selectedByField[field]?.size > 1) last = index;
+  });
+  return last;
+}
+
+function summarizeConclusionGroup(groupScenarios) {
+  const metrics = imageMetricDefinitions().map((definition) => ({
+    ...definition,
+    value: average(groupScenarios.map((scenario) => definition.value(scenario))),
+  }));
+  const load = metrics.find((metric) => metric.key === "cluster.2.running");
+  const fps = metrics.find((metric) => metric.key === "hizee.scene.fps");
+  const ipc = metrics.find((metric) => metric.key === "topdown.level1.total.IPC");
+  const fe = metrics.find((metric) => metric.key === "topdown.level1.total.FE BOUND");
+  const be = metrics.find((metric) => metric.key === "topdown.level1.total.BE BOUND");
+  const mpki = metrics.find((metric) => metric.key === "topdown.level1.total.MPKI");
+  const syscall = metrics.find((metric) => metric.key === "syscall.density");
+  const bottleneck = commonBottleneck(groupScenarios);
+  const instruction = commonInstruction(groupScenarios);
+  const hot = commonHotspot(groupScenarios);
+  const riskScore = roundTwo((toFiniteNumber(load?.value) || 0) / 35 + (toFiniteNumber(fe?.value) || 0) / 8 + (toFiniteNumber(mpki?.value) || 0) / 6 + (toFiniteNumber(syscall?.value) || 0) / 80);
+  return {
+    scenarioCount: groupScenarios.length,
+    riskScore,
+    riskLevel: riskScore >= 6 ? "high" : riskScore >= 4 ? "medium" : "stable",
+    metrics,
+    conclusions: [
+      { title: "负载", kind: "load", badge: loadRiskLabel(load?.value, fps?.value), text: `平均大核 running ${displayValue(load?.value, "%")}；平均帧率 ${displayValue(fps?.value, "fps")}。` },
+      { title: "TOPDOWN", kind: "topdown", badge: bottleneck.metric, text: `主瓶颈集中在 ${[bottleneck.metric, bottleneck.level2, bottleneck.level3].filter(Boolean).join(" > ")}；IPC ${displayValue(ipc?.value)}，FE ${displayValue(fe?.value)}，BE ${displayValue(be?.value)}。` },
+      { title: "指令分布", kind: "instruction", badge: instruction.name, text: `${instruction.name} 在范围内较突出，平均 ${displayValue(instruction.value)}。` },
+      { title: "系统调用", kind: "syscall", badge: displayValue(syscall?.value), text: `系统调用密度平均 ${displayValue(syscall?.value)} 条/千万条指令。` },
+      { title: "热点与瓶颈 SO/函数", kind: "hotspot", badge: hot.so, text: `热点主要集中在 ${hot.so} / ${hot.func}，平均占比 ${displayValue(hot.value, "%")}。` },
+    ],
+  };
+}
+
+function commonBottleneck(groupScenarios) {
+  const counts = new Map();
+  groupScenarios.forEach((scenario) => {
+    const thread = mainThread(scenario) || asArray(scenario.topdownInfo)[0] || {};
+    const bottleneck = thread.total ? getBottleneckPath(asArray(thread.total.hierarchy), asObject(thread.total.level1)) : { metric: "NA", level2: "NA" };
+    const key = [bottleneck.metric, bottleneck.level2, bottleneck.level3].filter(Boolean).join(" > ");
+    counts.set(key, { ...bottleneck, count: (counts.get(key)?.count || 0) + 1 });
+  });
+  return [...counts.values()].sort((a, b) => b.count - a.count)[0] || { metric: "NA", level2: "NA" };
+}
+
+function commonInstruction(groupScenarios) {
+  const values = new Map();
+  groupScenarios.forEach((scenario) => {
+    const thread = mainThread(scenario, "instructionMix") || asArray(scenario.instructionMix)[0] || {};
+    asArray(thread.total).forEach((item) => {
+      const value = toFiniteNumber(item.value);
+      if (value == null) return;
+      const current = values.get(item.name) || [];
+      current.push(value);
+      values.set(item.name, current);
+    });
+  });
+  return [...values.entries()]
+    .map(([name, valueList]) => ({ name, value: average(valueList) }))
+    .sort((a, b) => (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0))[0] || { name: "NA", value: null };
+}
+
+function commonHotspot(groupScenarios) {
+  const values = new Map();
+  groupScenarios.forEach((scenario) => {
+    asArray(scenario.hotspotInfo?.cycle).forEach((thread) => {
+      asArray(thread.sos).forEach((so) => {
+        const func = asArray(so.funcs)[0] || {};
+        const key = `${so.name}::${func.name}`;
+        const current = values.get(key) || { so: so.name, func: func.name, values: [] };
+        const value = toFiniteNumber(so.value);
+        if (value != null) current.values.push(value);
+        values.set(key, current);
+      });
+    });
+  });
+  return [...values.values()]
+    .map((item) => ({ so: item.so || "NA", func: item.func || "NA", value: average(item.values) }))
+    .sort((a, b) => (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0))[0] || { so: "NA", func: "NA", value: null };
+}
+
+function renderConclusionGroupCard(group) {
+  return h("article", { class: `card conclusion-card risk-${group.summary.riskLevel}` }, [
+    h("div", { class: "card-head" }, [
+      h("h3", {}, [group.title]),
+      h("span", {}, [`${group.summary.scenarioCount} 个场景`]),
+    ]),
+    h("div", { class: "summary-list" }, group.summary.conclusions.map((item) => h("div", { class: `summary-item ${item.kind}` }, [
+      h("div", { class: "summary-item-head" }, [
+        h("strong", {}, [item.title]),
+        h("span", {}, [item.badge]),
+      ]),
+      h("p", {}, [item.text]),
+    ]))),
+    h("details", { class: "conclusion-detail" }, [
+      h("summary", {}, ["查看明细场景"]),
+      miniTable(["场景名称", "平台", "镜像版本", "类型", "应用版本"], group.scenarios.map((scenario) => [
+        scenario.base.name,
+        scenario.base.platform,
+        scenario.base.imageVersion,
+        scenario.base.type,
+        scenario.base.appVersion,
+      ])),
+    ]),
+  ]);
+}
+
+function renderImageVersionControls(versions) {
+  return h("section", { class: "filter-panel image-control" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["版本对比筛选池"]),
+      h("span", {}, ["当前镜像 / 基线镜像 / 场景范围"]),
+    ]),
+    h("div", { class: "filters image-filters" }, [
+      h("label", { class: "field" }, [
+        h("span", {}, ["当前镜像版本"]),
+        h("select", { onchange: (event) => { state.currentImageVersion = event.target.value; render(); } },
+          versions.map((version) => h("option", { value: version, selected: state.currentImageVersion === version }, [version]))),
+      ]),
+      h("label", { class: "field" }, [
+        h("span", {}, ["基线镜像版本"]),
+        h("select", { onchange: (event) => { state.baselineImageVersion = event.target.value; render(); } },
+          versions.map((version) => h("option", { value: version, selected: state.baselineImageVersion === version }, [version]))),
+      ]),
+      ...filterFields.filter(([field]) => field !== "imageVersion").map(([field, label]) => h("label", { class: "field" }, [
+        h("span", {}, [label]),
+        h("select", {
+          onchange: (event) => {
+            state.imageFilters[field] = event.target.value;
+            render();
+          },
+        }, [
+          h("option", { value: "" }, [`全部${label}`]),
+          ...unique(field).map((value) => h("option", { value, selected: state.imageFilters[field] === value }, [value])),
+        ]),
+      ])),
+    ]),
+  ]);
+}
+
+function buildImageCompareReport() {
+  const current = scenarios
+    .filter((scenario) => scenario.base.imageVersion === state.currentImageVersion)
+    .filter((scenario) => matchesFilters(scenario, state.imageFilters));
+  const candidates = current.length ? current : scenarios.filter((scenario) => matchesFilters(scenario, state.imageFilters)).slice(0, 6);
+  const scenarioDiffs = candidates.map((scenario) => buildScenarioImageDiff(scenario));
+  const summary = summarizeScenarioDiffs(scenarioDiffs);
+  const metricDiffs = summarizeMetricDiffs(scenarioDiffs);
+  return {
+    currentImageVersion: state.currentImageVersion,
+    baselineImageVersion: state.baselineImageVersion,
+    scenarioDiffs,
+    summary,
+    metricDiffs,
+  };
+}
+
+function buildScenarioImageDiff(currentScenario) {
+  const baselineScenario = findBaselineScenario(currentScenario);
+  const metrics = imageMetricDefinitions().map((metric) => {
+    const current = metric.value(currentScenario);
+    const baseline = baselineScenario ? metric.value(baselineScenario) : syntheticBaselineValue(current, currentScenario, metric.key);
+    const delta = valueDelta(current, baseline);
+    const deltaPercent = percentDelta(current, baseline);
+    const judgement = judgeMetricChange(metric, delta, deltaPercent);
+    return { ...metric, current, baseline, delta, deltaPercent, judgement };
+  });
+  const riskScore = metrics.reduce((sum, metric) => sum + (metric.judgement === "bad" ? metric.weight : metric.judgement === "good" ? -0.6 : 0), 0);
+  const status = riskScore >= 2 ? "regression" : riskScore <= -1 ? "improvement" : "stable";
+  const topThread = mainThread(currentScenario) || asArray(currentScenario.topdownInfo)[0] || {};
+  const bottleneck = topThread?.total ? getBottleneckPath(asArray(topThread.total.hierarchy), asObject(topThread.total.level1)) : { metric: "NA", level2: "NA" };
+  return {
+    scenario: currentScenario,
+    baselineScenario,
+    metrics,
+    keyChanges: metrics.filter((metric) => metric.judgement !== "neutral").sort((a, b) => Math.abs(b.deltaPercent || b.delta || 0) - Math.abs(a.deltaPercent || a.delta || 0)).slice(0, 3),
+    status,
+    riskLevel: riskScore >= 3.5 ? "high" : riskScore >= 2 ? "medium" : status === "improvement" ? "low" : "stable",
+    riskScore: roundTwo(riskScore),
+    bottleneckPath: [bottleneck.metric, bottleneck.level2, bottleneck.level3].filter(Boolean),
+  };
+}
+
+function imageMetricDefinitions() {
+  return [
+    { key: "cluster.2.running", label: "大核 running", unit: "%", direction: "down", weight: 1, value: (scenario) => getMetricValue(scenario, "cluster.2.running", state.threadTypes) },
+    { key: "hizee.scene.fps", label: "平均帧率", unit: "fps", direction: "up", weight: 2, value: (scenario) => getMetricValue(scenario, "hizee.scene.fps", state.threadTypes) },
+    { key: "hizee.scene.latency", label: "平均 latency", unit: "ns", direction: "down", weight: 1.2, value: (scenario) => getMetricValue(scenario, "hizee.scene.latency", state.threadTypes) },
+    { key: "topdown.level1.total.IPC", label: "主逻辑 IPC", unit: "", direction: "up", weight: 1.4, value: (scenario) => threadMetricValue(scenario, "topdown.level1.total.IPC") },
+    { key: "topdown.level1.total.MPKI", label: "主逻辑 MPKI", unit: "PKI", direction: "down", weight: 1.2, value: (scenario) => threadMetricValue(scenario, "topdown.level1.total.MPKI") },
+    { key: "topdown.level1.total.FE BOUND", label: "主逻辑 FE BOUND", unit: "PKI", direction: "down", weight: 1.8, value: (scenario) => threadMetricValue(scenario, "topdown.level1.total.FE BOUND") },
+    { key: "topdown.level1.total.BE BOUND", label: "主逻辑 BE BOUND", unit: "PKI", direction: "down", weight: 1.5, value: (scenario) => threadMetricValue(scenario, "topdown.level1.total.BE BOUND") },
+    { key: "syscall.density", label: "系统调用密度", unit: "条/千万条指令", direction: "down", weight: 1, value: (scenario) => threadMetricValue(scenario, "syscall.density", "syscallInfo") },
+  ];
+}
+
+function threadMetricValue(scenario, key, sourceName = "topdownInfo") {
+  const thread = mainThread(scenario, sourceName) || asArray(scenario[sourceName])[0];
+  return thread ? getMetricValueForThread(scenario, key, thread) : null;
+}
+
+function mainThread(scenario, sourceName = "topdownInfo") {
+  return asArray(scenario[sourceName]).find((thread) => getThreadType(thread) === "main");
+}
+
+function findBaselineScenario(currentScenario) {
+  const exact = scenarios.find((scenario) =>
+    scenario.base.imageVersion === state.baselineImageVersion
+    && scenario.base.name === currentScenario.base.name
+    && scenario.base.appVersion === currentScenario.base.appVersion
+    && scenario.base.platform === currentScenario.base.platform);
+  if (exact) return exact;
+  return scenarios.find((scenario) =>
+    scenario.base.imageVersion === state.baselineImageVersion
+    && scenario.base.name === currentScenario.base.name
+    && scenario.base.appVersion === currentScenario.base.appVersion);
+}
+
+function syntheticBaselineValue(current, scenario, key) {
+  const value = toFiniteNumber(current);
+  if (value == null) return null;
+  const drift = (stableHash(`${scenario.id}:${state.currentImageVersion}:${state.baselineImageVersion}:${key}`) % 1400) / 100 - 7;
+  return roundTwo(Math.max(0, value - drift));
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function valueDelta(current, baseline) {
+  const currentValue = toFiniteNumber(current);
+  const baselineValue = toFiniteNumber(baseline);
+  return currentValue == null || baselineValue == null ? null : roundTwo(currentValue - baselineValue);
+}
+
+function percentDelta(current, baseline) {
+  const currentValue = toFiniteNumber(current);
+  const baselineValue = toFiniteNumber(baseline);
+  if (currentValue == null || baselineValue == null || baselineValue === 0) return null;
+  return roundTwo(((currentValue - baselineValue) / Math.abs(baselineValue)) * 100);
+}
+
+function judgeMetricChange(metric, delta, deltaPercent) {
+  const deltaValue = toFiniteNumber(delta);
+  if (deltaValue == null) return "neutral";
+  const percent = Math.abs(toFiniteNumber(deltaPercent) || 0);
+  const absolute = Math.abs(deltaValue);
+  const threshold = metric.key.includes("IPC") ? 3 : metric.unit === "%" ? 5 : 8;
+  const changed = percent >= threshold || absolute >= (metric.key.includes("IPC") ? 0.08 : 2);
+  if (!changed) return "neutral";
+  const worse = metric.direction === "down" ? deltaValue > 0 : deltaValue < 0;
+  return worse ? "bad" : "good";
+}
+
+function summarizeScenarioDiffs(scenarioDiffs) {
+  const counts = {
+    matchedScenarioCount: scenarioDiffs.length,
+    regressionCount: scenarioDiffs.filter((item) => item.status === "regression").length,
+    improvementCount: scenarioDiffs.filter((item) => item.status === "improvement").length,
+    stableCount: scenarioDiffs.filter((item) => item.status === "stable").length,
+    highRiskCount: scenarioDiffs.filter((item) => item.riskLevel === "high").length,
+  };
+  const bottleneckCounts = new Map();
+  scenarioDiffs.forEach((item) => {
+    const key = item.bottleneckPath[0] || "NA";
+    bottleneckCounts.set(key, (bottleneckCounts.get(key) || 0) + 1);
+  });
+  const mainRegressionType = [...bottleneckCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "NA";
+  const riskLevel = counts.highRiskCount ? "high" : counts.regressionCount ? "medium" : "low";
+  return {
+    ...counts,
+    mainRegressionType,
+    riskLevel,
+    conclusion: makeImageConclusionText(counts, mainRegressionType),
+  };
+}
+
+function makeImageConclusionText(counts, mainRegressionType) {
+  if (!counts.matchedScenarioCount) return "当前筛选范围内没有可用于版本对比的场景。";
+  if (counts.regressionCount > counts.improvementCount) {
+    return `当前镜像相对基线有 ${counts.regressionCount} 个场景呈退化风险，主要瓶颈集中在 ${mainRegressionType}，建议优先复核高风险场景的主逻辑线程。`;
+  }
+  if (counts.improvementCount > counts.regressionCount) {
+    return `当前镜像相对基线改善场景更多，核心指标整体向好，可继续关注剩余持平场景是否存在局部线程风险。`;
+  }
+  return `当前镜像相对基线整体稳定，退化与改善数量接近，建议结合关键指标变化继续复核边界场景。`;
+}
+
+function summarizeMetricDiffs(scenarioDiffs) {
+  return imageMetricDefinitions().map((definition) => {
+    const metricRows = scenarioDiffs.map((scenarioDiff) => scenarioDiff.metrics.find((metric) => metric.key === definition.key)).filter(Boolean);
+    const currentValues = metricRows.map((metric) => toFiniteNumber(metric.current)).filter((value) => value != null);
+    const baselineValues = metricRows.map((metric) => toFiniteNumber(metric.baseline)).filter((value) => value != null);
+    const deltaValues = metricRows.map((metric) => toFiniteNumber(metric.delta)).filter((value) => value != null);
+    return {
+      ...definition,
+      currentAverage: average(currentValues),
+      baselineAverage: average(baselineValues),
+      deltaAverage: average(deltaValues),
+      regressionCount: metricRows.filter((metric) => metric.judgement === "bad").length,
+      improvementCount: metricRows.filter((metric) => metric.judgement === "good").length,
+    };
+  });
+}
+
+function average(values) {
+  const safeValues = asArray(values).map(toFiniteNumber).filter((value) => value != null);
+  return safeValues.length ? roundTwo(safeValues.reduce((sum, value) => sum + value, 0) / safeValues.length) : null;
+}
+
+function renderImageSummary(report) {
+  const summary = report.summary;
+  const cards = [
+    ["可比场景", summary.matchedScenarioCount, "个"],
+    ["退化风险", summary.regressionCount, "个"],
+    ["改善场景", summary.improvementCount, "个"],
+    ["高风险", summary.highRiskCount, "个"],
+    ["主瓶颈", summary.mainRegressionType, ""],
+  ];
+  return h("section", { class: `panel image-summary risk-${summary.riskLevel}` }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, [`${report.currentImageVersion || "当前镜像"} vs ${report.baselineImageVersion || "基线镜像"}`]),
+      h("span", {}, ["版本验收结论"]),
+    ]),
+    h("div", { class: "image-summary-grid" }, cards.map(([label, value, unit]) => h("article", { class: "summary-card" }, [
+      h("span", {}, [label]),
+      h("strong", {}, [`${displayText(value)}${unit}`]),
+    ]))),
+    h("p", { class: "image-conclusion" }, [summary.conclusion]),
+  ]);
+}
+
+function renderImageScenarioDiffs(report) {
+  const rows = [...report.scenarioDiffs].sort((a, b) => b.riskScore - a.riskScore);
+  return h("section", { class: "panel" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["场景变化排行"]),
+      h("span", {}, ["按风险分与退化幅度排序"]),
+    ]),
+    h("div", { class: "scenario-diff-list" }, rows.map((item) => h("article", { class: `scenario-diff-card ${item.status}` }, [
+      h("div", { class: "scenario-diff-head" }, [
+        h("div", {}, [
+          h("strong", {}, [item.scenario.base.name]),
+          h("span", {}, [`${item.scenario.base.platform} · ${item.scenario.base.type} · ${item.scenario.base.appVersion}`]),
+        ]),
+        h("div", { class: "status-pack" }, [
+          h("span", { class: `status-pill ${item.status}` }, [statusLabel(item.status)]),
+          h("span", { class: `risk-pill ${item.riskLevel}` }, [riskLabel(item.riskLevel)]),
+        ]),
+      ]),
+      h("div", { class: "change-chips" }, item.keyChanges.length ? item.keyChanges.map((metric) => h("span", { class: metric.judgement }, [
+        `${metric.label} ${formatSigned(metric.delta)}${metric.unit ? ` ${metric.unit}` : ""}`,
+      ])) : [h("span", { class: "neutral" }, ["关键指标无明显变化"])]),
+      h("div", { class: "bottleneck-line" }, [
+        h("b", {}, ["瓶颈链路"]),
+        ...item.bottleneckPath.map((name) => h("span", {}, [name])),
+      ]),
+    ]))),
+  ]);
+}
+
+function renderImageMetricDiffs(report) {
+  return h("section", { class: "panel" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["关键指标 delta"]),
+      h("span", {}, ["当前均值 / 基线均值 / 平均变化"]),
+    ]),
+    h("div", { class: "metric-diff-grid" }, report.metricDiffs.map((metric) => h("article", { class: "metric-diff-card" }, [
+      h("div", { class: "metric-diff-title" }, [
+        h("strong", {}, [metric.label]),
+        h("span", {}, [metric.unit || "-"]),
+      ]),
+      h("div", { class: "metric-diff-values" }, [
+        h("span", {}, ["当前", h("b", {}, [displayValue(metric.currentAverage)])]),
+        h("span", {}, ["基线", h("b", {}, [displayValue(metric.baselineAverage)])]),
+        h("span", { class: deltaClass(metric, metric.deltaAverage) }, ["Δ", h("b", {}, [formatSigned(metric.deltaAverage)])]),
+      ]),
+      h("div", { class: "metric-diff-foot" }, [
+        h("span", {}, [`退化 ${metric.regressionCount}`]),
+        h("span", {}, [`改善 ${metric.improvementCount}`]),
+      ]),
+    ]))),
+  ]);
+}
+
+function renderBottleneckAttribution(report) {
+  const groups = new Map();
+  report.scenarioDiffs.forEach((diff) => {
+    const key = diff.bottleneckPath[0] || "NA";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(diff);
+  });
+  return h("section", { class: "panel" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["瓶颈变化归因"]),
+      h("span", {}, ["按 TOPDOWN 主瓶颈聚合"]),
+    ]),
+    h("div", { class: "bottleneck-grid" }, [...groups.entries()].map(([name, items]) => h("article", { class: "bottleneck-card" }, [
+      h("h3", {}, [name]),
+      h("p", {}, [`命中 ${items.length} 个场景，退化 ${items.filter((item) => item.status === "regression").length} 个`]),
+      h("ul", {}, items.slice(0, 4).map((item) => h("li", {}, [
+        h("span", {}, [item.scenario.base.name]),
+        h("b", {}, [statusLabel(item.status)]),
+      ]))),
+    ]))),
+  ]);
+}
+
+function renderImageVersionTrend(report) {
+  const metric = report.metricDiffs.find((item) => item.key === "topdown.level1.total.FE BOUND") || report.metricDiffs[0];
+  const versions = unique("imageVersion");
+  const trendRows = versions.map((version, index) => ({
+    label: version,
+    detail: index === versions.indexOf(report.baselineImageVersion) ? "基线" : index === versions.indexOf(report.currentImageVersion) ? "当前" : "历史",
+    value: syntheticVersionMetric(metric, version, index),
+  }));
+  return h("section", { class: "panel" }, [
+    h("div", { class: "section-title" }, [
+      h("h2", {}, ["多版本趋势预览"]),
+      h("span", {}, [`${metric?.label || "关键指标"} · ${metric?.unit || "-"}`]),
+    ]),
+    trendChart(trendRows, metric?.unit || "", true),
+  ]);
+}
+
+function syntheticVersionMetric(metric, version, index) {
+  const base = toFiniteNumber(metric?.baselineAverage) ?? 10;
+  const noise = ((stableHash(`${version}:${metric?.key}`) % 1000) / 1000 - 0.5) * 3;
+  return roundTwo(Math.max(0, base + index * 0.7 + noise));
+}
+
+function statusLabel(status) {
+  return { regression: "退化", improvement: "改善", stable: "持平" }[status] || "持平";
+}
+
+function riskLabel(risk) {
+  return { high: "高风险", medium: "中风险", low: "低风险", stable: "稳定" }[risk] || "稳定";
+}
+
+function formatSigned(value) {
+  const number = toFiniteNumber(value);
+  if (number == null) return "NA";
+  return `${number > 0 ? "+" : ""}${displayValue(number)}`;
+}
+
+function deltaClass(metric, delta) {
+  const judgement = judgeMetricChange(metric, delta, percentDelta((toFiniteNumber(metric.baselineAverage) || 0) + (toFiniteNumber(delta) || 0), metric.baselineAverage));
+  return judgement === "bad" ? "bad" : judgement === "good" ? "good" : "neutral";
+}
+
 
 function getTrendMetricCategory(key) {
   if (key.startsWith("topdown.")) return "topdown";
@@ -931,8 +2164,8 @@ function topdownThreadTitle(thread) {
     h("span", { class: "thread-name-text" }, [threadDisplayLabel(thread)]),
     h("span", { class: "thread-meta-badges" }, [
       loadBadge(thread.loadShare),
-      kernelShareBadge("内核占比(Inst)", thread.kernelInstShare),
-      kernelShareBadge("内核占比(Cycle)", thread.kernelCycleShare),
+      kernelShareBadge("内核占比(Inst)", kernelShareValue(thread, "inst")),
+      kernelShareBadge("内核占比(Cycle)", kernelShareValue(thread, "cycle")),
     ]),
   ]);
 }
@@ -1118,12 +2351,12 @@ function renderTopdownHierarchy(groups, level1) {
     h("div", { class: "bottleneck-summary" }, [
       h("strong", {}, ["瓶颈链路"]),
       h("div", { class: "path-chips" }, [
-        { level: "L1", name: bottleneck.metric },
-        { level: "L2", name: bottleneck.level2 },
-        bottleneck.level3 ? { level: "L3", name: bottleneck.level3 } : null,
+        { level: "L1", name: bottleneck.metric, value: bottleneck.metricValue },
+        { level: "L2", name: bottleneck.level2, value: bottleneck.level2Value },
+        bottleneck.level3 ? { level: "L3", name: bottleneck.level3, value: bottleneck.level3Value } : null,
       ].filter(Boolean).map((item) => h("span", {}, [
         h("b", {}, [item.level]),
-        h("em", {}, [item.name]),
+        h("em", {}, [item.name, item.value == null ? "" : ` ${displayMetric(item.value, "PKI", 1)}`]),
       ]))),
     ]),
     ...asArray(groups).map((group) => {
@@ -1158,8 +2391,11 @@ function getBottleneckPath(groups, level1) {
   const level3 = [...asArray(level2?.level3)].sort((a, b) => (toFiniteNumber(b.value) || 0) - (toFiniteNumber(a.value) || 0))[0];
   return {
     metric: group?.metric || metric || "NA",
+    metricValue: toFiniteNumber(level1[group?.metric || metric]),
     level2: level2?.name || "NA",
+    level2Value: toFiniteNumber(level2?.value),
     level3: level3?.name,
+    level3Value: toFiniteNumber(level3?.value),
   };
 }
 

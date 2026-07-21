@@ -125,6 +125,31 @@ export const filterFields = [
   ["imageVersion", "镜像版本"],
 ];
 
+export function classifySyscallBusinessTags(calls, limit = 2) {
+  const totals = new Map();
+  for (const call of calls || []) {
+    if (!call || call.name === "others") continue;
+    const label = syscallBusinessType(call.name);
+    const share = Number(call.share ?? call.value);
+    totals.set(label, (totals.get(label) || 0) + (Number.isFinite(share) ? share : 0));
+  }
+  return [...totals.entries()]
+    .map(([label, share]) => ({ label, share: round(share) }))
+    .sort((a, b) => b.share - a.share || a.label.localeCompare(b.label))
+    .slice(0, limit);
+}
+
+function syscallBusinessType(name) {
+  const key = String(name || "").toLowerCase();
+  if (/futex|poll|epoll|nanosleep|clock_nanosleep|sched_yield|select/.test(key)) return "同步等待型";
+  if (/recv|send|read|write|socket|connect|accept/.test(key)) return "I/O通信型";
+  if (/mmap|munmap|mprotect|madvise|brk/.test(key)) return "内存管理型";
+  if (/open|close|stat|fcntl|getdents|fsync/.test(key)) return "文件访问型";
+  if (/ioctl|prctl|getpid|gettid|clone|set_/.test(key)) return "系统控制型";
+  if (/clock|gettimeofday|timer/.test(key)) return "时序驱动型";
+  return "通用系统服务型";
+}
+
 export function normalizeMetricName(value) {
   return String(value || "")
     .trim()
