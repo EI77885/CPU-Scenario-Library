@@ -1,126 +1,197 @@
-# CPU 场景库后端与前端展示使用说明
+# CPU 场景库性能 Dashboard
 
-本工程用于递归扫描指定目录下的 CPU 场景 Excel 数据和 `trace_summary.json` 三视图结构化数据，增量更新本地 SQLite 数据库，并通过本地 Node 服务给前端页面展示。数据目录既可以是工程内的 `source_data`，也可以是任意外部绝对路径。
+CPU 场景库用于沉淀不同手机平台、镜像版本和应用场景下的 CPU 性能特征，并提供单特征概览、场景横向对比和多范围结论汇总。
 
-目标环境假设为 Windows x86。
+项目由纯前端 Dashboard、Node.js REST 服务、SQLite 数据库和 Excel/Trace 数据导入器组成。前端无需构建步骤，服务启动后即可通过浏览器访问。
 
-## 1. 工程内容
+## 核心能力
 
-核心文件：
+### 特征概览
 
-- `server.js`：本地静态资源服务和 REST API 服务。
-- `scripts/import-source-data.js`：从默认或指定目录递归发现并增量导入数据。
-- `scripts/generate-source-data.js`：生成示例 `source_data`，仅用于演示或本地测试。
-- `data/cpu_scenario_library.sqlite`：导入后生成的 SQLite 数据库。
-- `source_data/`：目标环境的数据源目录。
-- `index.html`、`src/`：前端页面资源。
+- 按负载、TOPDOWN、指令分布、系统调用、热点与瓶颈 SO/函数分类选择一个指标。
+- 使用抓取平台、镜像版本、场景类型、场景名称和应用版本圈定目标范围。
+- 线程级指标支持主逻辑线程、渲染线程、其他线程、主逻辑进程和渲染进程多选。
+- 结果按数值降序展示，同时给出平均值、中位值、取值范围和明细表。
+- 当前结果可保留为快照，用于多次筛选结果之间的对比。
 
-常用 API：
+### 对比展示
 
-- `GET /api/bootstrap`
-- `GET /api/scenarios`
-- `GET /api/scenarios/compare?ids=a,b,c`
-- `GET /api/features`
-- `GET /api/features/trend?featureKey=...&threadTypes=main,render`
+- 从筛选结果中选择最多 3 个场景进行横向对比。
+- 多个场景始终按列对齐，便于逐模块检查差异。
+- 展示模块依次为：
+  1. 基础信息
+  2. 场景特征摘要
+  3. 负载信息
+  4. TOPDOWN 信息
+  5. 指令分布信息
+  6. 系统调用信息
+  7. 热点与瓶颈 SO/函数
+- TOPDOWN 和热点 SO/函数默认展开主逻辑线程；同类线程在多个对比场景间同步展开或折叠。
 
-## 2. Windows 环境准备
+### 结论汇总
 
-目标机器需要安装：
+- 使用多选目标范围筛选池组织跨平台、跨镜像、跨类型或跨场景结论。
+- 筛选顺序固定为：抓取平台 -> 镜像版本 -> 场景类型 -> 场景名称 -> 应用版本。
+- 按最后一级多选维度组织对比，未细分的更低层级数据会聚合后形成结论。
+- 每个汇总条目包含负载、TOPDOWN、指令分布、系统调用及热点 SO/函数摘要，并可展开查看明细场景。
 
-1. Node.js 24 或更新版本。
-2. 可在命令行中直接执行的 `unzip` 命令。
-3. Edge、Chrome 或其他现代浏览器。
+## 分析数据
 
-在 PowerShell 中检查：
+### 基础信息
+
+场景类型、场景名称、应用版本、场景描述、配置说明、抓取平台、镜像版本和归档路径。
+
+### 负载与 ACR
+
+- `cluster load overview`：小/中/大核 cluster 的 running 与 idle，占比合计 100%。
+- `cluster process overview`：按进程拆分 running，热点进程累计前 80%，其余合并为 `other process`。
+- `cluster thread overview`：继承进程视图中的 idle 和 `other process`，线程热点累计前 80%，其余合并为 `other thread`。
+- Hizee 指标：所有进程、UI 进程和 Render Service 在各 cluster 的 running；各 cluster 平均频率；场景平均帧率、DDR 平均频率、带宽和 latency。
+- ACR 用于衡量绝对算力需求：
+
+```text
+core ACR    = running 占比 * (平均频率 / 峰值频率)
+cluster ACR = cluster 内多个 core ACR 的均值
+system ACR  = 系统内多个 cluster ACR 的均值
+```
+
+场景特征摘要会结合帧率目标、CPU ACR 和 DDR 平均频率生成满帧/掉帧、cluster 高载和 DDR 载荷标签，并突出同类场景中最高或最低 20% 的异常指标。
+
+### TOPDOWN
+
+- 每个场景按主逻辑线程、渲染线程、其他线程展示。
+- Level 1：IPC、MPKI、FE BOUND、BE BOUND。
+- 总体 PMU 展开 Level 2/Level 3，内核 PMU 仅展示 Level 1。
+- 突出显示 L1 -> L2 -> L3 瓶颈链路和对应 PKI。
+- 额外诊断组包括 LINX MEMSTALL、CACHE REFILL、TLB REFILL & PREFETCH。
+- 摘要按线程展示 IPC（总体/内核）、内核占比（Inst/Cycle）、Bound 链路和全层级指标异常。
+
+### 指令、系统调用和热点
+
+- 指令分布：总体/内核态 PMU 事件，单位为 PKI；摘要使用堆叠条展示各线程指令构成。
+- 系统调用：每个线程的 syscall 密度和 Top5 调用占比，不足 100% 的部分归为 `others`。
+- 系统调用业务画像由离线规则生成，例如同步等待、文件 IO、内存管理、网络 IO 和进程调度。
+- 热点与瓶颈：按 Cycle 热点、FE BOUND、BE BOUND 展示 Top3 线程 -> Top3 SO -> 每个 SO 的 Top3 函数。
+
+## 技术架构
+
+```text
+CPU测试场景库分析*.xlsx + trace_summary.json
+                       |
+                       v
+          scripts/import-source-data.js
+                       |
+                       v
+        data/cpu_scenario_library.sqlite
+                       |
+                       v
+              server.js REST API
+                       |
+                       v
+        index.html + src/main.js + src/styles.css
+```
+
+- 后端：Node.js 内置 `node:http` 与 `node:sqlite`。
+- Excel 解析：`exceljs`。
+- 数据库：SQLite，服务端只读访问，导入器负责写入。
+- 前端：原生 HTML/CSS/JavaScript，无打包和编译步骤。
+
+## 环境要求
+
+- Node.js 24 或更新版本。
+- npm。
+- Chrome、Edge 或其他现代浏览器。
+
+项目使用 `node:sqlite`，旧版 Node.js 无法启动。Excel 由 `exceljs` 解析，不要求系统额外安装 `unzip` 命令。
+
+## 快速开始
+
+### 使用仓库内示例数据
+
+```bash
+git clone https://github.com/EI77885/CPU-Scenario-Library.git
+cd CPU-Scenario-Library
+npm install
+npm run setup:data
+npm start
+```
+
+浏览器访问：
+
+```text
+http://localhost:5173/
+```
+
+`npm run setup:data` 会生成并导入演示数据，仅用于本地体验。真实数据环境不要执行该命令。
+
+### 使用真实归档数据
+
+```bash
+npm install
+npm run update:data -- --source "/absolute/path/to/cpu-data-archive"
+npm start
+```
+
+Windows PowerShell 示例：
 
 ```powershell
-node -v
-unzip -v
+npm install
+npm run update:data -- --source "D:\cpu-data-archive"
+npm start
 ```
 
-注意：
+服务监听 `0.0.0.0:5173`，启动日志会同时打印本机和可用的局域网访问地址。
 
-- 当前后端使用 Node 内置 `node:sqlite`，因此 Node 版本需要足够新。
-- 当前 Excel 读取依赖 `unzip` 命令读取 `.xlsx` 内部 XML。如果目标机器没有 `unzip`，导入脚本会失败。可以安装 Git for Windows、MSYS2 或 UnZip for Windows，并把 `unzip.exe` 加入 `PATH`。
-- 本工程目前没有 npm 依赖，通常不需要执行 `npm install`。
+## 数据发现与配对
 
-## 3. 部署工程
+导入器既支持仓库内的 `source_data`，也支持任意外部目录。目录层级和目录名称不是识别前提。
 
-将整个工程目录复制到 Windows，例如：
+### 必需文件
+
+每个场景必须有且只有一组：
 
 ```text
-D:\cpu-scenario-library
+CPU测试场景库分析*.xlsx
+trace_summary.json
 ```
 
-进入工程目录：
+规则如下：
 
-```powershell
-cd D:\cpu-scenario-library
-```
+- Excel 文件名必须以 `CPU测试场景库分析` 开头，并以 `.xlsx` 结尾。
+- `~$` 开头的 Excel 临时文件会被忽略。
+- 导入器从 `--source` 指定的根目录递归查找两类文件。
+- 平台、镜像版本、场景类型、场景名称、应用版本等业务字段从 Excel 读取，不依赖目录名。
+- `trace_summary.json` 只会配对给其路径上最近的 Excel 所在目录。
+- Excel 和 summary 必须一一对应；一个文件不会复用给多个场景。
+- 缺少文件、出现多个候选、JSON 无效或配对不唯一时，该场景会被跳过，避免错误数据进入网页数据库。
 
-建议保留以下目录结构：
+推荐结构仍然是：
 
 ```text
-cpu-scenario-library\
-  data\
-  scripts\
-  source_data\
-  src\
-  index.html
-  package.json
-  server.js
+archive/
+  platform_image-version/
+    01_game/
+      app_scene/
+        CPU测试场景库分析_xxx.xlsx
+        hitrace/
+          trace_summary.json
 ```
 
-其中 `data\` 可以不存在，导入数据库时会自动创建。
-
-## 4. 准备数据源
-
-未传 `--source` 时，默认读取工程根目录下的 `source_data`：
+但以下不规则结构同样可以识别：
 
 ```text
-D:\cpu-scenario-library\source_data
+any-root/
+  arbitrary-folder/
+    CPU测试场景库分析_xxx.xlsx
+    nested-trace-output/
+      trace_summary.json
 ```
 
-下面的结构可以继续使用，但不再强制：
+旧版 `source_data/分类/场景` 结构继续沿用原场景 ID；其它目录结构的 ID 由 Excel 中的平台、镜像版本、场景类型和场景名称生成。
 
-```text
-source_data\
-  01_game\
-    wzry_replay\
-      CPU测试场景库分析_xxx.xlsx
-      hitrace\
-        trace_summary.json
-  02_app\
-    douyin_video\
-      CPU测试场景库分析_xxx.xlsx
-      hitrace\
-        trace_summary.json
-```
+## trace_summary.json
 
-发现与配对规则：
-
-- 导入器会从数据根目录开始递归扫描，目录可位于工程之外，层级和目录名不限。
-- Excel 文件名必须以 `CPU测试场景库分析` 开头并以 `.xlsx` 结尾；`~$` 开头的临时文件会被忽略。
-- 每个待导入场景必须同时具备一个 Excel 和一个 `trace_summary.json`。平台、镜像版本、场景类型、场景名称、应用版本等业务字段均从 Excel 读取，不依赖目录名。
-- `trace_summary.json` 会分配给其路径上最近的 Excel 所在目录。一个 summary 不会分给多个 Excel，一个 Excel 也不能对应多个 summary。
-- 缺少配对文件，或同一最近目录存在多个 Excel/summary 导致对应关系不唯一时，该场景会被跳过并打印包含完整路径的 warning，避免把错误数据写入网页数据库。
-- 推荐仍将 `trace_summary.json` 放在 Excel 所在目录下的 `hitrace\` 子目录中，但 `hitrace` 名称和固定层级不再是识别前提。
-- 目标环境 Excel 只有一个 sheet 页也可以。导入器会按关键词识别基础信息、负载信息、TOPDOWN、指令分布、系统调用、热点 SO/函数等分段。
-- 示例数据源的单 sheet 布局按目标表截图组织：顶部基础信息、负载三视图区域、Hizee 表、横向 TOPDOWN 块、指令分布、系统调用、热点/Bound SO 与函数三层树，并包含合并单元格。导入器会读取 `.xlsx` 的 `mergeCells`，将合并区域左上角文本作为上下文继承，避免合并单元格导致线程名、SO 名或分段标题丢失。
-- 频率单位统一使用 `Mhz`，数据库和前端展示都不再转换为 `GHz`。
-- 从 Excel 数据表中提取到的所有数值统一保留两位小数，百分比同样保留两位小数；数据库中保存的是已四舍五入后的数值，前端展示也固定为两位小数。
-
-## 5. 准备 trace_summary.json
-
-三视图数据不从 Excel 图片 OCR 获取，而是从与 Excel 一对一配对的：
-
-```text
-hitrace\trace_summary.json
-```
-
-读取。目标环境不再解析 `hitrace`、`systrace`、Perfetto 或其它原始 trace，也不再由本项目生成 `trace_summary.json`。上游工具需要提前把三视图结果转换为下面的 JSON 结构。文件可以位于任意子目录，但建议继续放在该场景 Excel 同目录下的 `hitrace\` 中。
-
-`trace_summary.json` 结构为：
+Trace 三视图不从 Excel 图片或原始 trace 解析，而是直接读取已经结构化的 JSON：
 
 ```json
 {
@@ -130,306 +201,207 @@ hitrace\trace_summary.json
 }
 ```
 
-注意：
+上游工具需要提前把 Perfetto/Hitrace 结果转换为该结构。本项目不会解析原始 `hitrace`、`systrace` 或 Perfetto 文件。
 
-- 进程视图按进程 running 负载降序累计前 80%，剩余归 `other process`；线程视图继承这部分 `other process`，只展开前 80% 进程内的线程，并在这些线程里继续按负载降序累计前 80%，剩余归 `other thread`。
-- `clusterOverview`、`processOverview`、`threadOverview` 会直接写入负载信息模块的三视图数据表。
-- 如果 `trace_summary.json` 缺失、无法与 Excel 唯一配对或格式不合法，导入器会记录 warning，并跳过该场景。
+数据约束：
 
-## 6. 增量更新数据库
+- `clusterOverview` 中 running + idle 应等于 100%。
+- `processOverview` 应保留 cluster idle，并将非热点进程合并为 `other process`。
+- `threadOverview` 应继承 idle 和 `other process`，并将非热点线程合并为 `other thread`。
+- JSON 缺失、格式错误或无法唯一配对时，整个场景不会导入。
 
-正常更新数据库时执行：
+## 导入命令
 
-```powershell
-node scripts/import-source-data.js
-```
+默认从仓库内 `source_data` 增量导入：
 
-也可以使用 npm 脚本：
-
-```powershell
+```bash
 npm run update:data
 ```
 
-`npm run update:data` 只会导入已有 Excel 和 `hitrace\trace_summary.json`，不会解析任何原始 trace。
+指定任意数据根目录：
 
-导入结果会写入：
+```bash
+npm run update:data -- --source "/path/to/archive"
+```
+
+指定数据库文件：
+
+```bash
+node scripts/import-source-data.js --source "/path/to/archive" --db "/path/to/library.sqlite"
+```
+
+常用参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--source <path>` | 指定递归扫描的数据根目录 |
+| `--db <path>` | 指定 SQLite 数据库文件 |
+| `--debug` | 输出文件识别、分段解析和错误堆栈 |
+| `--strict` | 发现坏表或解析失败时让命令返回失败 |
+| `--reset` / `--full` | 清空数据库后重新导入 |
+
+增量导入会插入新场景，并重写已存在场景的主表和子表；本次目录中没有出现的旧场景会保留。数值在写入数据库前统一四舍五入到两位小数。
+
+真实数据环境请谨慎使用 `--reset` 或 `--full`。
+
+## 数据删除
+
+删除脚本默认只预览，不会直接修改数据库：
+
+```bash
+npm run delete:data -- list-scenarios
+node scripts/delete-data.js scenario <scenario_id>
+```
+
+确认后增加 `--yes`：
+
+```bash
+node scripts/delete-data.js scenario <scenario_id> --yes
+```
+
+删除单项指标：
+
+```bash
+node scripts/delete-data.js metric topdown \
+  --where thread_id=<thread_id> \
+  --where "metric=FE BOUND" \
+  --yes
+```
+
+使用非默认数据库时增加 `--db <path>`。完整参数可执行：
+
+```bash
+node scripts/delete-data.js --help
+```
+
+## REST API
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/bootstrap` | 返回前端初始化所需的场景、筛选字段和特征定义 |
+| `GET /api/scenarios` | 返回场景基础信息，支持基础字段筛选 |
+| `GET /api/scenarios/compare?ids=a,b,c` | 返回最多 3 个场景的完整对比数据 |
+| `GET /api/features` | 返回数据库中可用于概览的特征列表 |
+| `GET /api/features/trend?featureKey=...` | 返回指定特征的降序趋势数据与平均值 |
+| `GET /api/images/compare` | 返回当前镜像与基线镜像的场景和指标差异 |
+
+场景筛选参数：
+
+- `platform`
+- `imageVersion`
+- `type`
+- `name`
+- `appVersion`
+
+线程级趋势接口还支持 `threadTypes=main,render,other,main_process,render_process`。
+
+示例：
+
+```bash
+curl "http://localhost:5173/api/scenarios?platform=CHS-SGT"
+curl "http://localhost:5173/api/features"
+curl "http://localhost:5173/api/features/trend?featureKey=syscall.density&threadTypes=main,render"
+```
+
+## 项目结构
 
 ```text
-D:\cpu-scenario-library\data\cpu_scenario_library.sqlite
+cpu-scenario-library/
+  data/                         SQLite 数据库
+  scripts/
+    data-common.js              公共枚举、PMU 和线程类型定义
+    generate-source-data.js     演示数据生成器
+    import-source-data.js       Excel/JSON 发现、配对和导入
+    delete-data.js              安全删除工具
+  source_data/                  默认数据根目录
+  src/
+    data.js                     API 不可用时的前端演示数据
+    main.js                     三页面交互和分析逻辑
+    styles.css                  Dashboard 样式
+  index.html                    页面入口
+  server.js                     静态资源与 REST API 服务
 ```
 
-如需指定工程外的任意数据根目录或数据库文件：
+## 部署建议
+
+### Windows 内网机器
 
 ```powershell
-node scripts/import-source-data.js --source D:\cpu-scenario-library\source_data --db D:\cpu-scenario-library\data\cpu_scenario_library.sqlite
-```
-
-也可以通过 npm 传递参数，注意保留中间的 `--`：
-
-```powershell
-npm run update:data -- --source D:\cpu-data-archive
-```
-
-增量导入规则：
-
-- 新增场景会插入数据库。
-- 已存在场景会更新主表，并清理后重写该场景的子表数据。
-- 未出现在本次扫描目录中的旧场景会保留。
-- 旧版标准 `source_data\分类\场景` 结构继续沿用原场景 ID；其它目录结构的场景 ID 由 Excel 中的“平台 + 镜像版本 + 场景类型 + 场景名称”生成，保证同场景的不同平台或镜像版本可以同时入库。
-- 导入时会对 Excel 中解析出的数值做两位小数规整，包括负载占比、Hizee 数据、PMU、系统调用占比和热点 SO/函数占比。
-- 默认使用宽松导入模式：单个场景或单个分段解析失败时会记录 warning，并继续导入其它可识别数据。
-- 单个场景失败不会回滚其它场景，导入结果会显示 `已导入场景数/发现的场景数`。
-
-如果看到类似：
-
-```text
-Skipped topdown for xxx: Cannot read properties of undefined (reading 'some')
-Skipped syscalls for xxx: Cannot read properties of undefined (reading 'map')
-```
-
-这表示导入脚本内部对某一行或某个分段的解析遇到了空行、缺失列或非预期表格结构，不表示 Excel 里真的有 `some` 或 `map` 关键字。Excel 中的图片通常存放在 `.xlsx` 的 media/drawing XML 中，导入器只读取工作表单元格文本，不会把图片内容当作指标文本解析。
-
-需要定位具体文件和分段时使用调试模式：
-
-```powershell
-node scripts/import-source-data.js --debug
-```
-
-调试输出会打印当前导入的 Excel 路径、sheet 行数、识别到的场景基础信息、单 sheet 分段行号，以及被跳过分段的错误堆栈。建议将这段输出连同对应 Excel 一起保存，便于继续增强解析规则。
-
-TOPDOWN/PMU 名称会先做通用归一化，再匹配别名映射：
-
-- 忽略大小写、空格、斜杠、短横线、下划线差异。
-- 自动去除 `_PKI` 后缀。
-- `FE_PKI`、`FE`、`FRONTEND_BOUND` 等高置信别名会映射到前端的 `FE BOUND`。
-- `BE_PKI`、`BE`、`BACKEND_BOUND` 等高置信别名会映射到前端的 `BE BOUND`。
-- 常见 PMU 写法差异，例如 cache/tlb/stall/branch 类事件的下划线和拼写变体，会映射到前端标准事件名。
-
-如果 TOPDOWN 区域出现“大写事件名 + 右侧数值”，但导入器无法确定它对应哪个前端指标，会输出：
-
-```text
-Unresolved topdown metric alias for <scenario_id>: <metric_name>
-```
-
-这类不做自动猜测，需要确认映射关系后再加入别名表。
-
-如果希望发现任何坏表后让命令返回失败，可增加 `--strict`：
-
-```powershell
-node scripts/import-source-data.js --strict
-```
-
-只有需要清空并重建整个数据库时，才执行：
-
-```powershell
-node scripts/import-source-data.js --reset
-```
-
-或：
-
-```powershell
-node scripts/import-source-data.js --full
-```
-
-请勿在目标真实数据环境中随意执行 `scripts/generate-source-data.js`，它会生成示例数据，主要用于本地测试。
-
-## 7. 删除数据库数据
-
-工程提供了安全删除脚本：
-
-```powershell
-node scripts/delete-data.js
-```
-
-默认不带 `--yes` 时只预览匹配行数，不会真正删除。确认无误后再加 `--yes`。
-
-查看当前场景 ID：
-
-```powershell
-node scripts/delete-data.js list-scenarios
-```
-
-删除一个完整场景及其所有子表数据：
-
-```powershell
-node scripts/delete-data.js scenario 01_game-wzry_replay
-node scripts/delete-data.js scenario 01_game-wzry_replay --yes
-```
-
-删除某个 TOPDOWN 指标：
-
-```powershell
-node scripts/delete-data.js metric topdown --where thread_id=01_game-wzry_replay-main --where "metric=FE BOUND"
-node scripts/delete-data.js metric topdown --where thread_id=01_game-wzry_replay-main --where "metric=FE BOUND" --yes
-```
-
-删除某个指令分布指标：
-
-```powershell
-node scripts/delete-data.js metric instruction --where thread_id=01_game-wzry_replay-main --where event=ld_st_retired --yes
-```
-
-删除某个系统调用 TOP 项：
-
-```powershell
-node scripts/delete-data.js metric syscall --where thread_id=01_game-wzry_replay-main --where name=futex --yes
-```
-
-也可以直接按白名单表删除行：
-
-```powershell
-node scripts/delete-data.js row hizee_clusters --where scenario_id=01_game-wzry_replay --where cluster=小核 --yes
-```
-
-支持的指标别名：
-
-- `topdown` -> `topdown_metrics`
-- `instruction` -> `instruction_metrics`
-- `syscall` -> `syscall_top`
-- `syscall_metric` / `syscall_density` -> `syscall_metrics`
-- `hizee_cluster` -> `hizee_clusters`
-- `hizee_scene` -> `hizee_scene`
-- `load_cluster`、`load_process`、`load_thread`
-- `hotspot_thread`、`hotspot_so`、`hotspot_function`
-
-如需操作非默认数据库文件，可加 `--db`：
-
-```powershell
-node scripts/delete-data.js list-scenarios --db D:\cpu-scenario-library\data\cpu_scenario_library.sqlite
-```
-
-## 8. 启动服务并查看前端
-
-启动本地服务：
-
-```powershell
-node server.js
-```
-
-默认访问地址：
-
-```text
-http://localhost:5173
-```
-
-如需指定端口：
-
-```powershell
-$env:PORT=5174
-node server.js
-```
-
-然后打开：
-
-```text
-http://localhost:5174
-```
-
-也可以使用 npm 脚本：
-
-```powershell
+cd D:\cpu-scenario-library
+npm ci
+npm run update:data -- --source "D:\cpu-data-archive"
+$env:PORT=5173
 npm start
 ```
 
-## 9. 推荐日常更新流程
+浏览器访问启动日志给出的局域网地址。生产环境建议使用 Windows 服务、任务计划程序或进程管理器保持 `server.js` 运行，并定时执行增量导入。
 
-目标环境每次有新 Excel 或三视图 JSON 结果时：
+### 更换端口
 
-1. 将新的 Excel 与对应 `trace_summary.json` 放入默认 `source_data` 或任意外部数据目录。
-2. 执行增量导入：
+macOS/Linux：
 
-```powershell
-node scripts/import-source-data.js --source D:\cpu-data-archive
+```bash
+PORT=5174 npm start
 ```
 
-也可以直接使用组合命令：
-
-```powershell
-npm run update:data -- --source D:\cpu-data-archive
-```
-
-3. 如果 `server.js` 已经在运行，刷新浏览器页面即可看到最新数据库数据。
-
-可以用 Windows 任务计划程序定时执行导入命令，实现周期性更新数据库。
-
-## 10. 快速验证
-
-检查数据库是否已生成：
-
-```powershell
-Test-Path .\data\cpu_scenario_library.sqlite
-```
-
-检查接口是否正常：
-
-```powershell
-curl http://localhost:5173/api/scenarios
-```
-
-检查前端：
-
-```text
-http://localhost:5173
-```
-
-页面中的 Hizee 频率列应展示 `平均频率(Mhz)`、`DDR平均频率(Mhz)`。
-
-## 11. 常见问题
-
-### node:sqlite 报错
-
-说明 Node 版本不满足要求。请升级到 Node.js 24 或更新版本。
-
-### unzip 不是内部或外部命令
-
-说明 Windows 当前 `PATH` 中没有 `unzip.exe`。安装 Git for Windows、MSYS2 或 UnZip for Windows 后，将 `unzip.exe` 所在目录加入系统 `PATH`，重新打开 PowerShell 再执行导入。
-
-### Missing hitrace directory
-
-每个场景目录建议有同级 `hitrace\` 目录。缺失时导入器会记录 warning，并跳过该场景的三视图数据；为了数据完整，即使暂时没有真实 trace，也建议创建该目录。
-
-### Missing trace summary
-
-表示该场景缺少：
-
-```text
-hitrace\trace_summary.json
-```
-
-这种情况下导入会继续，但负载三视图结构化数据不会入库。
-
-### 某个 Excel 格式不标准
-
-导入器会尽量按关键词识别单 sheet 中的分段，包括 `负载信息`、`CLUSTER LOAD OVERVIEW`、`TOPDOWN`、`指令分布`、`系统调用`、`Library:`、`Function:` 等。某个分段无法识别时会跳过该分段并输出 warning，不会直接中断整个数据库更新。
-
-如果某个 `.xlsx` 文件损坏或无法解压，该场景会失败并出现在 `Failed scenarios` 列表中，其它场景仍会继续导入。
-
-### 前端没有最新数据
-
-按顺序检查：
-
-1. 是否已执行 `node scripts/import-source-data.js`。
-2. `data\cpu_scenario_library.sqlite` 的修改时间是否更新。
-3. 浏览器是否刷新了页面。
-4. 服务启动目录是否是工程根目录。
-
-### 端口被占用
-
-换一个端口启动：
+Windows PowerShell：
 
 ```powershell
 $env:PORT=5174
-node server.js
+npm start
 ```
 
-## 12. 本地生成示例数据
+## 快速验证
 
-仅在需要重建演示数据时使用：
-
-```powershell
-node scripts/generate-source-data.js
-node scripts/import-source-data.js --reset
-node server.js
+```bash
+node --check server.js
+node --check src/main.js
+node --check scripts/import-source-data.js
+npm run update:data -- --strict
+curl "http://localhost:5173/api/scenarios"
 ```
 
-生成脚本会创建 5 类、13 个示例场景，并在每个场景目录下生成单 sheet Excel 和同级 `hitrace\trace_summary.json`。
+## 常见问题
+
+### 页面打开后为空白
+
+不要直接双击 `index.html`。前端需要通过 `server.js` 获取 `/api/bootstrap`，请先执行 `npm start`，再访问 `http://localhost:5173/`。
+
+### Database is not ready
+
+尚未生成数据库。先执行：
+
+```bash
+npm run update:data -- --source "/path/to/archive"
+```
+
+或使用演示数据：
+
+```bash
+npm run setup:data
+```
+
+### Excel 已存在但场景未导入
+
+依次检查：
+
+1. 文件名是否以 `CPU测试场景库分析` 开头。
+2. Excel 路径下是否存在唯一可配对的 `trace_summary.json`。
+3. JSON 是否为合法格式。
+4. Excel 中是否包含平台、镜像版本、场景类型和场景名称等基础字段。
+5. 使用 `--debug --strict` 查看具体文件和分段错误。
+
+### Excel 解析出现重叠合并单元格
+
+导入器会兼容 Excel 中重复或重叠的 merge 定义，并将合并区域左上角文本作为上下文继承。若仍有字段缺失，请使用 `--debug` 保存对应文件路径和错误堆栈。
+
+### 端口被占用
+
+设置新的 `PORT` 后重新启动。服务会明确打印端口占用错误，不会静默失败。
+
+## 相关文档
+
+- `CPU_SCENARIO_LIBRARY_HANDOFF.md`：前端数据模型、展示规则和后端交接说明。
+- `CPU场景库UI会话实录.md`：历史 UI 需求与迭代记录。
+
+> 当前仓库中的示例数据和部分结论规则用于验证产品与 UI。接入真实采集链路时，应继续校准平台峰值频率、分位阈值、业务标签和回归判定标准。
