@@ -266,7 +266,7 @@ function renderComparePage() {
     }),
     renderScenarioSelector(matched),
     renderCompareSection("1. 基础信息", active, renderBaseCard),
-    renderCompareSection("2. 场景特征摘要", active, renderScenarioSummaryCard),
+    renderCompareSection("2. 场景特征摘要", active, renderScenarioSummaryCard, renderLoadThresholdGuide()),
     renderCompareSection("3. 负载信息", active, renderLoadCard),
     renderCompareSection("4. TOPDOWN 信息", active, renderTopdownCard),
     renderCompareSection("5. 指令分布信息", active, renderInstructionCard),
@@ -301,10 +301,37 @@ function renderScenarioSelector(matched) {
   ]);
 }
 
-function renderCompareSection(title, scenariosToShow, renderer) {
+function renderCompareSection(title, scenariosToShow, renderer, context = null) {
   return h("section", { class: "panel" }, [
     h("div", { class: "section-title" }, [h("h2", {}, [title]), h("span", {}, [`${scenariosToShow.length} 个场景`])]),
+    context,
     h("div", { class: "compare-grid", style: `--cols:${Math.max(1, scenariosToShow.length)}` }, scenariosToShow.map(renderer)),
+  ]);
+}
+
+function renderLoadThresholdGuide() {
+  const thresholds = [
+    ["帧率", "差值 <=1 满帧", ">1 掉帧", ">5 严重掉帧"],
+    ["小核 ACR", "<=30% 低载", ">30%-60% 中载", ">60% 高载"],
+    ["中核 ACR", "<=10% 低载", ">10%-20% 中载", ">20% 高载"],
+    ["大核 ACR", "<=5% 低载", ">5%-10% 中载", ">10% 高载"],
+    ["整机 CPU", "<=20% 轻载", ">20%-40% 中载", ">40% 高载"],
+    ["DDR", "<1GHz 低载", "1GHz-2GHz 中载", ">=2GHz 高载"],
+  ];
+  return h("div", { class: "load-threshold-guide" }, [
+    h("div", { class: "load-threshold-head" }, [
+      h("strong", {}, ["负载判定口径"]),
+      h("span", {}, ["cluster 标签表示局部压力；整机 CPU 标签表示算力与核数加权后的总体压力"]),
+    ]),
+    h("div", { class: "load-threshold-grid" }, thresholds.map(([label, low, medium, high]) => h("div", { class: "load-threshold-item" }, [
+      h("b", {}, [label]),
+      h("span", { class: "low" }, [low]),
+      h("span", { class: "medium" }, [medium]),
+      h("span", { class: "high" }, [high]),
+    ]))),
+    h("p", { class: "load-acr-formula" }, [
+      "整机 ACR = Sum(cluster ACR x 单核算力比 x 核数比) / Sum(单核算力比 x 核数比)。CHS 小/中/大核单核算力比为 1:3:4，核数比为 4:6:1.5。",
+    ]),
   ]);
 }
 
@@ -494,6 +521,13 @@ function renderInstructionSummaryThread(profile) {
       ]),
       h("span", { class: "instruction-total-chip" }, [`总计 ${displayMetric(profile.totalPki, " PKI", 1)}`]),
     ]),
+    h("div", { class: "instruction-profile-row" }, [
+      h("span", { class: "instruction-profile-label" }, ["指令画像"]),
+      ...profile.profileTags.map((item) => h("span", { class: `instruction-profile-tag ${item.className}` }, [
+        h("b", {}, [item.label]),
+        ` ${displayMetric(item.share, "%", 1)}`,
+      ])),
+    ]),
     h("div", { class: "instruction-stack", title: profile.segments.map((item) => `${item.name}: ${displayMetric(item.value, " PKI", 1)} / ${displayMetric(item.share, "%", 1)}`).join("\n") },
       profile.segments.map((item) => h("i", { style: `width:${safePercent(item.share)}%;background:${stackColor(item.name)}` }, [
         item.share >= 13 ? displayMetric(item.share, "%", 0) : "",
@@ -583,7 +617,7 @@ function scenarioLoadProfile(scenario) {
   const tags = loadProfileTags({ fps, targetFps, ddrFreq, acr: allAcr });
   return {
     tags,
-    text: `帧率 ${displayMetric(fps, "", 1)}/${targetFps}fps；ACR 全进程整机 ${displayMetric(allAcr.system, "%", 1)}、主逻辑/UI进程 ${displayMetric(uiAcr.system, "%", 1)}、Render Service ${displayMetric(renderAcr.system, "%", 1)}；DDR ${displayMetric(ddrFreq, " MHz", 0)}。`,
+    text: `帧率 ${displayMetric(fps, "", 1)}/${targetFps}fps；全进程 ACR 小/中/大/整机 ${acrText(allAcr)}，UI进程整机 ${displayMetric(uiAcr.system, "%", 1)}，Render Service整机 ${displayMetric(renderAcr.system, "%", 1)}；DDR ${displayMetric(ddrFreq, " MHz", 0)}。`,
     anomalies: loadSummaryAnomalies(scenario, values),
   };
 }
@@ -593,14 +627,21 @@ function scenarioLoadValues(scenario) {
   const allProcess = rows.find((row) => row.scope === "所有进程") || rows[0] || {};
   const uiProcess = rows.find((row) => row.scope === "UI进程") || rows[1] || {};
   const renderService = rows.find((row) => row.scope === "render service") || rows[2] || {};
-  const peaks = cpuPeakFrequencies(scenario.base?.platform);
+  const platformProfile = cpuPlatformProfile(scenario.base?.platform);
   return {
     fps: toFiniteNumber(allProcess.fps),
     ddrFreq: toFiniteNumber(allProcess.ddrFreq),
+    bandwidth: toFiniteNumber(allProcess.bandwidth),
+    latency: toFiniteNumber(allProcess.latency),
+    frequencies: {
+      little: toFiniteNumber(allProcess.littleFreq),
+      mid: toFiniteNumber(allProcess.midFreq),
+      big: toFiniteNumber(allProcess.bigFreq),
+    },
     targetFps: scenarioTargetFps(scenario),
-    allAcr: acrProfile(allProcess, peaks),
-    uiAcr: acrProfile(uiProcess, peaks),
-    renderAcr: acrProfile(renderService, peaks),
+    allAcr: acrProfile(allProcess, platformProfile),
+    uiAcr: acrProfile(uiProcess, platformProfile),
+    renderAcr: acrProfile(renderService, platformProfile),
   };
 }
 
@@ -612,11 +653,22 @@ function loadSummaryAnomalies(scenario, current) {
     summaryMetric("全进程中核ACR", current.allAcr.mid, "%", 1, peers.map((item) => item.allAcr.mid)),
     summaryMetric("全进程大核ACR", current.allAcr.big, "%", 1, peers.map((item) => item.allAcr.big)),
     summaryMetric("全进程整机ACR", current.allAcr.system, "%", 1, peers.map((item) => item.allAcr.system)),
+    summaryMetric("UI进程小核ACR", current.uiAcr.little, "%", 1, peers.map((item) => item.uiAcr.little)),
+    summaryMetric("UI进程中核ACR", current.uiAcr.mid, "%", 1, peers.map((item) => item.uiAcr.mid)),
+    summaryMetric("UI进程大核ACR", current.uiAcr.big, "%", 1, peers.map((item) => item.uiAcr.big)),
     summaryMetric("UI进程整机ACR", current.uiAcr.system, "%", 1, peers.map((item) => item.uiAcr.system)),
+    summaryMetric("Render Service小核ACR", current.renderAcr.little, "%", 1, peers.map((item) => item.renderAcr.little)),
+    summaryMetric("Render Service中核ACR", current.renderAcr.mid, "%", 1, peers.map((item) => item.renderAcr.mid)),
+    summaryMetric("Render Service大核ACR", current.renderAcr.big, "%", 1, peers.map((item) => item.renderAcr.big)),
     summaryMetric("Render Service整机ACR", current.renderAcr.system, "%", 1, peers.map((item) => item.renderAcr.system)),
+    summaryMetric("小核平均频率", current.frequencies.little, "MHz", 0, peers.map((item) => item.frequencies.little)),
+    summaryMetric("中核平均频率", current.frequencies.mid, "MHz", 0, peers.map((item) => item.frequencies.mid)),
+    summaryMetric("大核平均频率", current.frequencies.big, "MHz", 0, peers.map((item) => item.frequencies.big)),
     summaryMetric("DDR平均频率", current.ddrFreq, "MHz", 0, peers.map((item) => item.ddrFreq)),
+    summaryMetric("平均带宽", current.bandwidth, "GB/s", 1, peers.map((item) => item.bandwidth)),
+    summaryMetric("平均Latency", current.latency, "ns", 1, peers.map((item) => item.latency)),
   ];
-  return metrics.map(percentileSummaryAnomaly).filter(Boolean).slice(0, 3);
+  return metrics.map(percentileSummaryAnomaly).filter(Boolean);
 }
 
 function scenarioInstructionProfiles(scenario) {
@@ -635,9 +687,35 @@ function scenarioInstructionProfiles(scenario) {
       typeClass: summaryThreadTypeClass(thread),
       totalPki,
       segments,
+      profileTags: instructionProfileTags(events, totalPki),
       anomalies: instructionSummaryAnomalies(scenario, thread),
     };
   });
+}
+
+const instructionProfileCategories = [
+  { label: "内存访问型", className: "memory", pattern: /^(ld\/st_retired|unaligned_ldst_spec|ld\/strex_spec)$/iu },
+  { label: "整型计算型", className: "integer", pattern: /^(dp_spec|atomic\/cas_spec)$/iu },
+  { label: "浮点计算型", className: "floating", pattern: /^vfp_spec$/iu },
+  { label: "SIMD/向量型", className: "vector", pattern: /^(ase_spec|sve_inst_spec)$/iu },
+  { label: "分支控制型", className: "branch", pattern: /^br_retired$/iu },
+  { label: "原子同步型", className: "synchronization", pattern: /^(ld\/strex_spec|atomic\/cas_spec|barrier_spec)$/iu },
+];
+
+function instructionProfileTags(events, totalPki) {
+  const categories = instructionProfileCategories.map((category) => {
+    const value = events
+      .filter((event) => category.pattern.test(event.name))
+      .reduce((sum, event) => sum + event.value, 0);
+    return {
+      ...category,
+      value,
+      share: totalPki > 0 ? (value / totalPki) * 100 : 0,
+    };
+  }).filter((category) => category.value > 0)
+    .sort((a, b) => b.share - a.share || a.label.localeCompare(b.label));
+  if (!categories.length) return [];
+  return categories.filter((category, index) => index < 3 && category.share >= 12);
 }
 
 function scenarioSyscallProfiles(scenario) {
@@ -763,32 +841,48 @@ function scenarioTargetFps(scenario) {
   return scenario.base?.type === "游戏" ? 60 : 60;
 }
 
-function cpuPeakFrequencies(platform) {
+function cpuPlatformProfile(platform) {
   const text = String(platform || "").toLowerCase();
   if (text.includes("nch")) {
     return {
-      little: [1750],
-      mid: [2350, 2700],
-      big: [3100],
+      family: "NCH",
+      peaks: { little: [1750], mid: [2350, 2700], big: [3100] },
+      computeRatios: { little: 1, mid: 3, big: 4 },
+      coreRatios: { little: 4, mid: 6, big: 1.5 },
     };
   }
   return {
-    little: [1720],
-    mid: [2270],
-    big: [2750],
+    family: "CHS",
+    peaks: { little: [1720], mid: [2270], big: [2750] },
+    computeRatios: { little: 1, mid: 3, big: 4 },
+    coreRatios: { little: 4, mid: 6, big: 1.5 },
   };
 }
 
-function acrProfile(row, peaks) {
-  const little = clusterAcr(row?.littleRunning, row?.littleFreq, peaks.little);
-  const mid = clusterAcr(row?.midRunning, row?.midFreq, peaks.mid);
-  const big = clusterAcr(row?.bigRunning, row?.bigFreq, peaks.big);
+function acrProfile(row, platformProfile) {
+  const little = clusterAcr(row?.littleRunning, row?.littleFreq, platformProfile.peaks.little);
+  const mid = clusterAcr(row?.midRunning, row?.midFreq, platformProfile.peaks.mid);
+  const big = clusterAcr(row?.bigRunning, row?.bigFreq, platformProfile.peaks.big);
   return {
     little,
     mid,
     big,
-    system: average([little, mid, big]),
+    system: weightedSystemAcr({ little, mid, big }, platformProfile),
   };
+}
+
+function weightedSystemAcr(clusterValues, platformProfile) {
+  const clusters = ["little", "mid", "big"];
+  const weighted = clusters.map((cluster) => {
+    const value = toFiniteNumber(clusterValues[cluster]);
+    const computeRatio = toFiniteNumber(platformProfile.computeRatios[cluster]);
+    const coreRatio = toFiniteNumber(platformProfile.coreRatios[cluster]);
+    if (value == null || computeRatio == null || coreRatio == null) return null;
+    return { value, weight: computeRatio * coreRatio };
+  }).filter(Boolean);
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+  if (!totalWeight) return null;
+  return weighted.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight;
 }
 
 function clusterAcr(running, avgFreq, peakFreqs) {
@@ -821,20 +915,36 @@ function loadProfileTags({ fps, targetFps, ddrFreq, acr }) {
   if (fpsGap != null && fpsGap > 5) tags.push("严重掉帧");
   else if (fpsGap != null && fpsGap > 1) tags.push("掉帧");
   else if (fpsGap != null) tags.push("满帧");
-  if ((toFiniteNumber(acr?.little) || 0) > 60) tags.push("小核高载");
-  if ((toFiniteNumber(acr?.mid) || 0) > 20) tags.push("中核高载");
-  if ((toFiniteNumber(acr?.big) || 0) > 10) tags.push("大核高载");
-  if (!tags.some((tag) => tag.endsWith("高载"))) tags.push("CPU轻载");
+  tags.push(systemLoadTag(acr?.system));
+  tags.push(clusterLoadTag("小核", acr?.little, 30, 60));
+  tags.push(clusterLoadTag("中核", acr?.mid, 10, 20));
+  tags.push(clusterLoadTag("大核", acr?.big, 5, 10));
   const ddrValue = toFiniteNumber(ddrFreq);
   if (ddrValue != null && ddrValue < 1000) tags.push("DDR低载");
   else if (ddrValue != null && ddrValue < 2000) tags.push("DDR中载");
   else if (ddrValue != null) tags.push("DDR高载");
-  return tags;
+  return tags.filter(Boolean);
+}
+
+function systemLoadTag(value) {
+  const acr = toFiniteNumber(value);
+  if (acr == null) return "";
+  if (acr > 40) return "整机CPU高载";
+  if (acr > 20) return "整机CPU中载";
+  return "整机CPU轻载";
+}
+
+function clusterLoadTag(label, value, lowMax, highMin) {
+  const acr = toFiniteNumber(value);
+  if (acr == null) return "";
+  if (acr > highMin) return `${label}高载`;
+  if (acr > lowMax) return `${label}中载`;
+  return `${label}低载`;
 }
 
 function loadProfileSentence(tags) {
   const frameTag = tags.find((tag) => tag.includes("掉帧") || tag === "满帧");
-  const cpuTags = tags.filter((tag) => ["小核高载", "中核高载", "大核高载", "CPU轻载"].includes(tag));
+  const cpuTags = tags.filter((tag) => tag.includes("CPU") || /^[小中大]核[高中低]载$/u.test(tag));
   const ddrTag = tags.find((tag) => tag.startsWith("DDR"));
   return `负载画像为${[...cpuTags, ddrTag, frameTag].filter(Boolean).join("、")}。`;
 }

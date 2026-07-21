@@ -268,11 +268,91 @@ select {
   gap: 8px;
 }
 
+.load-threshold-guide {
+  background: #f8fafc;
+  border: 1px solid #d8e2ef;
+  border-left: 4px solid #22c55e;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.load-threshold-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.load-threshold-head strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.load-threshold-head span,
+.load-acr-formula {
+  color: #667085;
+  font-size: 10px;
+}
+
+.load-threshold-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+}
+
+.load-threshold-item {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 62px repeat(3, minmax(0, 1fr));
+  min-height: 34px;
+  padding: 5px 6px;
+}
+
+.load-threshold-item b {
+  color: #344054;
+  font-size: 9px;
+}
+
+.load-threshold-item span {
+  border-radius: 4px;
+  font-size: 8px;
+  line-height: 1.25;
+  padding: 3px 4px;
+  text-align: center;
+}
+
+.load-threshold-item .low {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.load-threshold-item .medium {
+  background: #fffbeb;
+  color: #a16207;
+}
+
+.load-threshold-item .high {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.load-acr-formula {
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+
 .summary-item {
-  border: 1px solid #dce4f0;
+  border: 1px solid #cbd5e1;
   border-left: 4px solid #94a3b8;
   border-radius: 8px;
-  background: #f8fafc;
+  background: #f1f5f9;
   padding: 9px 10px;
 }
 
@@ -305,8 +385,9 @@ select {
 }
 
 .summary-item-head strong {
-  color: #172033;
+  color: #0f172a;
   font-size: 13px;
+  font-weight: 900;
 }
 
 .summary-item-head span {
@@ -323,13 +404,13 @@ select {
 }
 
 .summary-item p {
-  color: #475467;
+  color: #334155;
   font-size: 12px;
   line-height: 1.45;
 }
 
 .summary-item.topdown {
-  background: #f8fbff;
+  background: #f1f6fc;
   padding-bottom: 2px;
 }
 
@@ -415,27 +496,33 @@ select {
 }
 
 .topdown-summary-thread {
-  border-left: 3px solid #94a3b8;
-  border-top: 1px solid #dce4f0;
-  margin: 0 -2px;
-  padding: 9px 0 9px 9px;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #64748b;
+  border-radius: 6px;
+  margin: 6px 0;
+  padding: 9px;
 }
 
 .topdown-summary-thread:first-child {
-  border-top: 0;
-  padding-top: 3px;
+  margin-top: 3px;
 }
 
 .topdown-summary-thread.main {
-  border-left-color: #22c55e;
+  background: #ecfdf3;
+  border-color: #86d9a6;
+  border-left-color: #16a34a;
 }
 
 .topdown-summary-thread.render {
-  border-left-color: #38bdf8;
+  background: #eff8ff;
+  border-color: #93c5e9;
+  border-left-color: #0284c7;
 }
 
 .topdown-summary-thread.other {
-  border-left-color: #a855f7;
+  background: #faf5ff;
+  border-color: #d8b4ef;
+  border-left-color: #9333ea;
 }
 
 .topdown-summary-thread-head,
@@ -582,31 +669,37 @@ select {
 
 .instruction-summary-thread,
 .syscall-summary-thread {
-  border-left: 3px solid #94a3b8;
-  border-top: 1px solid #dce4f0;
-  margin: 0 -2px;
-  padding: 8px 0 8px 9px;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #64748b;
+  border-radius: 6px;
+  margin: 6px 0;
+  padding: 9px;
 }
 
 .instruction-summary-thread:first-child,
 .syscall-summary-thread:first-child {
-  border-top: 0;
-  padding-top: 3px;
+  margin-top: 3px;
 }
 
 .instruction-summary-thread.main,
 .syscall-summary-thread.main {
-  border-left-color: #22c55e;
+  background: #ecfdf3;
+  border-color: #86d9a6;
+  border-left-color: #16a34a;
 }
 
 .instruction-summary-thread.render,
 .syscall-summary-thread.render {
-  border-left-color: #38bdf8;
+  background: #eff8ff;
+  border-color: #93c5e9;
+  border-left-color: #0284c7;
 }
 
 .instruction-summary-thread.other,
 .syscall-summary-thread.other {
-  border-left-color: #a855f7;
+  background: #faf5ff;
+  border-color: #d8b4ef;
+  border-left-color: #9333ea;
 }
 
 .compact-thread-head {
@@ -627,14 +720,72 @@ select {
 
 .instruction-total-chip,
 .syscall-density-chip {
-  background: #f1f5f9;
-  border: 1px solid #d8e0ea;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
   border-radius: 999px;
-  color: #475467;
+  color: #334155;
   font-size: 9px;
   font-weight: 800;
   padding: 3px 6px;
   white-space: nowrap;
+}
+
+.instruction-profile-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 7px;
+}
+
+.instruction-profile-label,
+.instruction-profile-tag {
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 1.25;
+  padding: 3px 6px;
+}
+
+.instruction-profile-label {
+  background: #334155;
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.instruction-profile-tag {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+
+.instruction-profile-tag b {
+  font-weight: 900;
+}
+
+.instruction-profile-tag.memory {
+  border-color: #60a5fa;
+  color: #1d4ed8;
+}
+
+.instruction-profile-tag.integer {
+  border-color: #34d399;
+  color: #047857;
+}
+
+.instruction-profile-tag.floating,
+.instruction-profile-tag.vector {
+  border-color: #a78bfa;
+  color: #6d28d9;
+}
+
+.instruction-profile-tag.branch {
+  border-color: #fbbf24;
+  color: #a16207;
+}
+
+.instruction-profile-tag.synchronization {
+  border-color: #fb7185;
+  color: #be123c;
 }
 
 .instruction-stack {
@@ -667,7 +818,7 @@ select {
 
 .instruction-stack-legend span {
   align-items: center;
-  color: #667085;
+  color: #475569;
   display: inline-flex;
   font-size: 8px;
   gap: 3px;
@@ -682,8 +833,8 @@ select {
 }
 
 .instruction-stack-legend b {
-  color: #344054;
-  font-weight: 700;
+  color: #1e293b;
+  font-weight: 800;
   overflow-wrap: anywhere;
 }
 
